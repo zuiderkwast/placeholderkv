@@ -3493,9 +3493,16 @@ void waitaofCommand(client *c) {
     ackreplicas = replicationCountAOFAcksByOffset(c->woff);
     acklocal = server.fsynced_reploff >= c->woff;
     if ((ackreplicas >= numreplicas && acklocal >= numlocal) || c->flag.deny_blocking) {
-        addReplyArrayLen(c, 2);
+        int bug = /*acklocal && */ c->flag.deny_blocking;
+        addReplyArrayLen(c, bug ? 3 : 2);
         addReplyLongLong(c, acklocal);
         addReplyLongLong(c, ackreplicas);
+        if (bug) {
+            sds foo = sdscatprintf(sdsempty(), "fsynced_reploff=%lld woff=%lld deny_blocking=%d aof_enabled=%d",
+                                   server.fsynced_reploff, c->woff, (int)c->flag.deny_blocking, (int)server.aof_enabled);
+            addReplyBulkSds(c, foo);
+            return;
+        }
         return;
     }
 
