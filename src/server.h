@@ -84,6 +84,7 @@ typedef long long ustime_t; /* microsecond time type. */
 
 #define VALKEYMODULE_CORE 1
 typedef struct serverObject robj;
+typedef struct serverObject valkey;
 #include "valkeymodule.h" /* Modules API defines. */
 
 /* Following includes allow test functions to be called from main() */
@@ -871,8 +872,8 @@ struct ValkeyModuleDigest {
 #define LRU_CLOCK_MAX ((1 << LRU_BITS) - 1) /* Max value of obj->lru */
 #define LRU_CLOCK_RESOLUTION 1000           /* LRU clock resolution in ms */
 
-#define OBJ_SHARED_REFCOUNT INT_MAX       /* Global object never destroyed. */
-#define OBJ_STATIC_REFCOUNT (INT_MAX - 1) /* Object allocated in the stack. */
+#define OBJ_SHARED_REFCOUNT ((1 << 30) - 1) /* Global object never destroyed. */
+#define OBJ_STATIC_REFCOUNT ((1 << 30) - 2) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
 struct serverObject {
     unsigned type : 4;
@@ -880,7 +881,10 @@ struct serverObject {
     unsigned lru : LRU_BITS; /* LRU time (relative to global lru_clock) or
                               * LFU data (least significant 8 bits frequency
                               * and most significant 16 bits access time). */
-    int refcount;
+    unsigned hasexpire : 1;
+    unsigned hasembkey : 1;
+    unsigned hasembkeyptr : 1;
+    unsigned refcount : 30;
     void *ptr;
 };
 
@@ -2969,7 +2973,6 @@ robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);
 robj *createStringObject(const char *ptr, size_t len);
 robj *createRawStringObject(const char *ptr, size_t len);
-robj *createEmbeddedStringObject(const char *ptr, size_t len);
 robj *tryCreateRawStringObject(const char *ptr, size_t len);
 robj *tryCreateStringObject(const char *ptr, size_t len);
 robj *dupStringObject(const robj *o);
