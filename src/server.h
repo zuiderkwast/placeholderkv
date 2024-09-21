@@ -2628,8 +2628,8 @@ extern dictType objectKeyHeapPointerValueDictType;
 extern dictType setDictType;
 extern dictType BenchmarkDictType;
 extern dictType zsetDictType;
-extern dictType kvstoreKeysDictType;
-extern dictType kvstoreExpiresDictType;
+extern dictType kvstoreKeysHashsetType;
+extern dictType kvstoreExpiresHashsetType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern dictType hashDictType;
 extern dictType stringSetDictType;
@@ -2637,7 +2637,7 @@ extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern dictType clientDictType;
 extern dictType objToDictDictType;
-extern dictType kvstoreChannelDictType;
+extern dictType kvstoreChannelHashsetType;
 extern dictType modulesDictType;
 extern dictType sdsReplyDictType;
 extern dictType keylistDictType;
@@ -3014,9 +3014,16 @@ int equalStringObjects(robj *a, robj *b);
 unsigned long long estimateObjectIdleTime(robj *o);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
 static inline int canUseSharedObject(void) {
-    return server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS);
+    //return server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS);
+    return 0;
 }
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
+
+/* Objects with key attached, AKA valkey objects */
+valkey *objectConvertToValkey(robj *val, const sds key);
+valkey *valkeyCreate(robj *val, const sds key);
+const sds valkeyGetKey(const valkey *val);
+long long valkeyGetExpire(const valkey *val);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);

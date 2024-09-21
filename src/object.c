@@ -150,7 +150,7 @@ robj *createStringObject(const char *ptr, size_t len) {
         return createRawStringObject(ptr, len);
 }
 
-sds valkeyGetKey(robj *val) {
+const sds valkeyGetKey(const valkey *val) {
     unsigned char *data = (void *)(val + 1);
     if (val->hasexpire) {
         /* Skip expire field */
@@ -167,8 +167,36 @@ sds valkeyGetKey(robj *val) {
     return NULL;
 }
 
-/* Creates a new object with an embedded key. */
-valkey *valkeyCreate(robj *val, const sds key) {
+long long valkeyGetExpire(const valkey *val) {
+    unsigned char *data = (void *)(val + 1);
+    if (val->hasexpire) {
+        return (long long)data;
+    } else {
+        return -1;
+    }
+}
+
+/* Attaches a key to the object, without reallocating the object. */
+static void objectSetKey(robj *val, const sds key) {
+    /* Set key pointer in val, increment the reference counter and return it
+     * as a new object. */
+    assert(val->refcount == 1 && val->hasembkeyptr && !val->hasembkey);
+    sds dup = sdsdup(key);
+
+    /* Find the correct location in val's data field. */
+    unsigned char *data = (void *)(val + 1);
+    if (val->hasexpire) {
+        /* Skip expire field */
+        data += sizeof(long long);
+    }
+    assert(*(sds *)data == NULL);
+    memcpy((void *)data, (void *)&dup, sizeof(void *));
+    return val;
+}
+
+/* Converts (updates, possibly reallocates) 'val' to a valkey object by
+ * attaching a key to it. */
+valkey *objectConvertToValkey(robj *val, const sds key) {
     /* A key must not already be embedded. */
     assert(valkeyGetKey(val) == NULL);
     if (val->encoding == OBJ_ENCODING_EMBSTR) {
@@ -180,7 +208,8 @@ valkey *valkeyCreate(robj *val, const sds key) {
          * want to embed both of them. We can embed one or the other depending
          * on sizes. */
 
-        /* Create a new object with val and key embedded. Leave 'val' intact. */
+        /* Create a new object with val and key embedded and decrement the
+         * reference counter of 'val'. */
 
         /* Calculate sizes */
         size_t key_sds_size = sdscopytobuffer(NULL, 0, key, NULL);
@@ -226,23 +255,21 @@ valkey *valkeyCreate(robj *val, const sds key) {
         sh->buf[val_len] = '\0';
 
         o->ptr = sh->buf;
+        decrRefcount(val);
         return o;
     } else {
-        /* Set key pointer in val, increment the reference counter and return it
-         * as a new object. */
-        assert(val->refcount == 1 && val->hasembkeyptr && !val->hasembkey);
-        sds dup = sdsdup(key);
-
-        /* Find the correct location in val's data field. */
-        unsigned char *data = (void *)(val + 1);
-        if (val->hasexpire) {
-            /* Skip expire field */
-            data += sizeof(long long);
-        }
-        memcpy((void *)data, (void *)&dup, sizeof(void *));
-        incrRefCount(val);
+        /* Convert in place. If there are multiple references to it, they're not
+         * "valkey" references so they shouldn't be concerned with the added
+         * key. */
+        objectSetKey(val, key);
         return val;
     }
+}
+
+/* Creates a "new" object with the attached key, without invalidating 'val' */
+valkey *valkeyCreate(robj *val, const sds key) {
+    incrRefCount(val);
+    return objectConvertToValkey(val, key);
 }
 
 /* Same as CreateRawStringObject, can return NULL if allocation fails */
@@ -1307,7 +1334,7 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
 
     for (j = 0; j < server.dbnum; j++) {
         serverDb *db = server.db + j;
-        if (!kvstoreNumAllocatedDicts(db->keys)) continue;
+        if (!kvstoreNumAllocatedHashsets(db->keys)) continue;
 
         unsigned long long keyscount = kvstoreSize(db->keys);
 
@@ -1329,8 +1356,8 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
         mh->overhead_db_hashtable_lut += kvstoreOverheadHashtableLut(db->expires);
         mh->overhead_db_hashtable_rehashing += kvstoreOverheadHashtableRehashing(db->keys);
         mh->overhead_db_hashtable_rehashing += kvstoreOverheadHashtableRehashing(db->expires);
-        mh->db_dict_rehashing_count += kvstoreDictRehashingCount(db->keys);
-        mh->db_dict_rehashing_count += kvstoreDictRehashingCount(db->expires);
+        mh->db_dict_rehashing_count += kvstoreHashsetRehashingCount(db->keys);
+        mh->db_dict_rehashing_count += kvstoreHashsetRehashingCount(db->expires);
     }
 
     mh->overhead_total = mem_total;

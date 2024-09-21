@@ -82,7 +82,7 @@ void defragEntryStartCbForKeys(void *ctx, void *oldptr) {
     serverDb *db = defragctx->privdata;
     sds oldsds = (sds)dictGetKey((dictEntry *)oldptr);
     int slot = defragctx->slot;
-    if (kvstoreDictSize(db->expires, slot)) {
+    if (kvstoreHashsetSize(db->expires, slot)) {
         dictEntry *expire_de = kvstoreDictFind(db->expires, slot, oldsds);
         defragctx->aux = expire_de;
     }
