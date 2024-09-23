@@ -64,17 +64,17 @@ int kvstoreHashsetRandomElement(kvstore *kvs, int didx, void **found);
 int kvstoreHashsetFairRandomElement(kvstore *kvs, int didx, void **found);
 unsigned int kvstoreHashsetSampleElements(kvstore *kvs, int didx, void **dst, unsigned int count);
 int kvstoreHashsetExpand(kvstore *kvs, int didx, unsigned long size);
-unsigned long kvstoreHashsetScanDefrag(kvstore *kvs,
-                                    int didx,
-                                    unsigned long v,
-                                    hashsetScanFunction *fn,
-                                    hashsetDefragFunctions *defragfns,
-                                    void *privdata);
-typedef hashset *(kvstoreHashsetLUTDefragFunction)(hashset *d);
-void kvstoreHashsetLUTDefrag(kvstore *kvs, kvstoreHashsetLUTDefragFunction *defragfn);
+unsigned long kvstoreHashsetScan(kvstore *kvs,
+                                 int didx,
+                                 unsigned long v,
+                                 hashsetScanFunction *fn,
+                                 void *privdata,
+                                 int flags);
+void kvstoreHashsetDefragInternals(kvstore *kvs, void *(*defragfn)(void *));
 /* void *kvstoreHashsetFetchElement(kvstore *kvs, int didx, const void *key); */
 int kvstoreHashsetFind(kvstore *kvs, int didx, void *key, void **found);
-hashsetEntry *kvstoreHashsetAddRaw(kvstore *kvs, int didx, void *key, hashsetEntry **existing);
+void **kvstoreHashsetFindRef(kvstore *kvs, int didx, const void *key);
+int kvstoreHashsetAddOrFind(kvstore *kvs, int didx, void *key, void **existing);
 
 void *kvstoreHashsetFindPositionForInsert(kvstore *kvs, int didx, void *key, void **existing);
 void kvstoreHashsetInsertAtPosition(kvstore *kvs, int didx, void *elem, void *position);

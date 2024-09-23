@@ -176,11 +176,15 @@ long long valkeyGetExpire(const valkey *val) {
     }
 }
 
+void valkeySetExpire(valkey *val, long long expire) {
+    unsigned char *data = (void *)(val + 1);
+    assert(val->hasexpire);
+    memcpy((void *)data, (void *)&expire, sizeof(long long));
+}
+
 /* Attaches a key to the object, without reallocating the object. */
 static void objectSetKey(robj *val, const sds key) {
-    /* Set key pointer in val, increment the reference counter and return it
-     * as a new object. */
-    assert(val->refcount == 1 && val->hasembkeyptr && !val->hasembkey);
+    assert(val->hasembkeyptr && !val->hasembkey && valkeyGetKey(val) == NULL);
     sds dup = sdsdup(key);
 
     /* Find the correct location in val's data field. */
@@ -195,11 +199,16 @@ static void objectSetKey(robj *val, const sds key) {
 }
 
 /* Converts (updates, possibly reallocates) 'val' to a valkey object by
- * attaching a key to it. */
+ * attaching a key to it. This functions takes ownership of "one refcount" of
+ * val. Think of val's refcount being decremented by one and the returned
+ * object's refcount being incremented by one. Confused? Simply use the returned
+ * object instead of 'val' after calling this function and you'll be fine. */
 valkey *objectConvertToValkey(robj *val, const sds key) {
     /* A key must not already be embedded. */
     assert(valkeyGetKey(val) == NULL);
     if (val->encoding == OBJ_ENCODING_EMBSTR) {
+        /* Create a new object with the key embedded and return it. */
+
         /* TODO: If there's space in val's allocation, we can embed the key
          * there and memmove the the embedded value, without creating a new
          * object.

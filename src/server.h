@@ -3024,6 +3024,7 @@ valkey *objectConvertToValkey(robj *val, const sds key);
 valkey *valkeyCreate(robj *val, const sds key);
 const sds valkeyGetKey(const valkey *val);
 long long valkeyGetExpire(const valkey *val);
+void valkeySetExpire(valkey *val, long long expire);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);

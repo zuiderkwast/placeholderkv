@@ -224,6 +224,8 @@ static valkey *dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_e
     return val;
 }
 
+/* FIXME: Go through all calls to dbAdd and make sure they use the returned
+ * value when necessary. */
 valkey *dbAdd(serverDb *db, robj *key, robj *val) {
     return dbAddInternal(db, key, val, 0);
 }
@@ -311,6 +313,9 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, void *
     if (overwrite) {
         /* RM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain old */
+        /* FIXME: We can't store shared objects in db when key is embedded in
+         * the object, so this is to be cleaned up. Just make sure we don't use
+         * shared objects when we convert robj-to-valkey or later. */
         incrRefCount(old);
         /* Although the key is not really deleted from the database, we regard
          * overwrite as two steps of unlink+add, so we still need to call the unlink
@@ -322,9 +327,17 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, void *
         /* Because of RM_StringDMA, old may be changed, so we need get old again */
         old = *oldref;
     }
-    /* Replace the old value at it's location */
+    /* Replace the old value at its location in the key space. */
     valkey *new = valkeyCreate(val, key->ptr);
     *oldref = new;
+    /* Replace the old value at its location in the expire space. */
+    long long expire = valkeyGetExpire(old);
+    if (expire >= 0) {
+        valkeySetExpire(new, expire);
+        void **expireref = kvstoreFindRef(db->expires, dict_index, key->ptr);
+        serverAssert(expireref != NULL);
+        *expireref = new;
+    }
     /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
     if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
         /* OK */
@@ -364,6 +377,7 @@ void setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
     else if (!(flags & SETKEY_DOESNT_EXIST))
         keyfound = (lookupKeyWrite(db, key) != NULL);
 
+    incrRefCount(val);
     if (!keyfound) {
         dbAdd(db, key, val);
     } else if (keyfound < 0) {
@@ -371,7 +385,6 @@ void setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
     } else {
         dbSetValue(db, key, val, 1, NULL);
     }
-    incrRefCount(val);
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }
@@ -1329,7 +1342,7 @@ void renameGenericCommand(client *c, int nx) {
          * with the same name. */
         dbDelete(c->db, c->argv[2]);
     }
-    dbAdd(c->db, c->argv[2], o);
+    o = dbAdd(c->db, c->argv[2], o);
     if (expire != -1) setExpire(c, c->db, c->argv[2], expire);
     dbDelete(c->db, c->argv[1]);
     signalModifiedKey(c, c->db, c->argv[1]);
@@ -1392,7 +1405,7 @@ void moveCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    dbAdd(dst, c->argv[1], o);
+    robj *new = dbAdd(dst, c->argv[1], o);
     if (expire != -1) setExpire(c, dst, c->argv[1], expire);
     incrRefCount(o);
 
