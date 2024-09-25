@@ -179,7 +179,8 @@ long long valkeyGetExpire(const valkey *val) {
 void valkeySetExpire(valkey *val, long long expire) {
     unsigned char *data = (void *)(val + 1);
     assert(val->hasexpire);
-    memcpy((void *)data, (void *)&expire, sizeof(long long));
+    *(long long *)data = expire;
+    //memcpy((void *)data, (void *)&expire, sizeof(long long));
 }
 
 /* Attaches a key to the object, without reallocating the object. */
@@ -203,8 +204,19 @@ static void objectSetKey(robj *val, const sds key) {
  * object's refcount being incremented by one. Confused? Simply use the returned
  * object instead of 'val' after calling this function and you'll be fine. */
 valkey *objectConvertToValkey(robj *val, const sds key) {
-    /* A key must not already be embedded. */
-    assert(valkeyGetKey(val) == NULL);
+    /* If a key pointer is already embedded, free that sds string first. */
+    if (val->hasembkeyptr) {
+        /* Find the correct location in val's data field. */
+        unsigned char *data = (void *)(val + 1);
+        if (val->hasexpire) {
+            /* Skip expire field */
+            data += sizeof(long long);
+        }
+        sds oldkey = *(sds *)data;
+        sdsfree(oldkey);
+        *(sds *)data = NULL;
+    }
+
     if (val->encoding == OBJ_ENCODING_EMBSTR) {
         /* Create a new object with the key embedded and return it. */
 
@@ -245,7 +257,8 @@ valkey *objectConvertToValkey(robj *val, const sds key) {
 
         /* Set the expire field. */
         long long expire = -1;
-        memcpy(data, &expire, sizeof(long long));
+        *(long long *)data = expire;
+        //memcpy(data, &expire, sizeof(long long));
         data += sizeof(long long);
 
         /* Copy embedded string. */

@@ -335,6 +335,7 @@ static valkey *dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, voi
     /* Replace the old value at its location in the expire space. */
     long long expire = valkeyGetExpire(old);
     if (expire >= 0) {
+        serverLog(LL_WARNING, "Old expire: %lld", expire);
         valkeySetExpire(new, expire);
         int dict_index = getKVStoreIndexForKey(key->ptr);
         void **expireref = kvstoreHashsetFindRef(db->expires, dict_index, key->ptr);
@@ -383,11 +384,11 @@ void setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
 
     incrRefCount(val);
     if (!keyfound) {
-        dbAdd(db, key, val);
+        val = dbAdd(db, key, val);
     } else if (keyfound < 0) {
-        dbAddInternal(db, key, val, 1);
+        val = dbAddInternal(db, key, val, 1);
     } else {
-        dbSetValue(db, key, val, 1, NULL);
+        val = dbSetValue(db, key, val, 1, NULL);
     }
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
@@ -517,7 +518,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(decoded->ptr, sdslen(decoded->ptr));
         decrRefCount(decoded);
-        dbReplaceValue(db, key, o);
+        o = dbReplaceValue(db, key, o);
     }
     return o;
 }
@@ -1533,7 +1534,7 @@ void copyCommand(client *c) {
         dbDelete(dst, newkey);
     }
 
-    dbAdd(dst, newkey, newobj);
+    newobj = dbAdd(dst, newkey, newobj);
     if (expire != -1) setExpire(c, dst, newkey, expire);
 
     /* OK! key copied */

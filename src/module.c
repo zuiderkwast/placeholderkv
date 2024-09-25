@@ -717,7 +717,7 @@ int moduleCreateEmptyKey(ValkeyModuleKey *key, int type) {
     case VALKEYMODULE_KEYTYPE_STREAM: obj = createStreamObject(); break;
     default: return VALKEYMODULE_ERR;
     }
-    dbAdd(key->db, key->key, obj);
+    obj = dbAdd(key->db, key->key, obj);
     key->value = obj;
     moduleInitKeyTypeSpecific(key);
     return VALKEYMODULE_OK;

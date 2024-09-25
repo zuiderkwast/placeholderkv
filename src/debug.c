@@ -741,7 +741,7 @@ void debugCommand(client *c) {
                 val = createStringObject(NULL, valsize);
                 memcpy(val->ptr, buf, valsize <= buflen ? valsize : buflen);
             }
-            dbAdd(c->db, key, val);
+            val = dbAdd(c->db, key, val);
             signalModifiedKey(c, c->db, key);
             decrRefCount(key);
         }
