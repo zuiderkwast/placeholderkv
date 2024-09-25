@@ -22,7 +22,7 @@ size_t kvstoreMemUsage(kvstore *kvs);
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
-                               hashsetScanFunction *scan_cb,
+                               hashsetScanFunction scan_cb,
                                kvstoreScanShouldSkipHashset *skip_cb,
                                void *privdata);
 int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashsetIndex *skip_cb);
@@ -39,7 +39,7 @@ uint64_t kvstoreGetHash(kvstore *kvs, const void *key);
 
 void kvstoreHashsetRehashingStarted(hashset *d);
 void kvstoreHashsetRehashingCompleted(hashset *d);
-size_t kvstoreHashsetMetadataSize(hashset *d);
+size_t kvstoreHashsetMetadataSize(void);
 
 /* kvstore iterator specific functions */
 kvstoreIterator *kvstoreIteratorInit(kvstore *kvs);
@@ -67,7 +67,7 @@ int kvstoreHashsetExpand(kvstore *kvs, int didx, unsigned long size);
 unsigned long kvstoreHashsetScan(kvstore *kvs,
                                  int didx,
                                  unsigned long v,
-                                 hashsetScanFunction *fn,
+                                 hashsetScanFunction fn,
                                  void *privdata,
                                  int flags);
 void kvstoreHashsetDefragInternals(kvstore *kvs, void *(*defragfn)(void *));
@@ -75,12 +75,14 @@ void kvstoreHashsetDefragInternals(kvstore *kvs, void *(*defragfn)(void *));
 int kvstoreHashsetFind(kvstore *kvs, int didx, void *key, void **found);
 void **kvstoreHashsetFindRef(kvstore *kvs, int didx, const void *key);
 int kvstoreHashsetAddOrFind(kvstore *kvs, int didx, void *key, void **existing);
+int kvstoreHashsetAdd(kvstore *kvs, int didx, void *element);
 
 void *kvstoreHashsetFindPositionForInsert(kvstore *kvs, int didx, void *key, void **existing);
 void kvstoreHashsetInsertAtPosition(kvstore *kvs, int didx, void *elem, void *position);
 
 int kvstoreHashsetTwoPhasePopFind(kvstore *kvs, int didx, const void *key, void **found, void **position);
 void kvstoreHashsetTwoPhasePopDelete(kvstore *kvs, int didx, void *position);
+int kvstoreHashsetPop(kvstore *kvs, int didx, const void *key, void **popped);
 int kvstoreHashsetDelete(kvstore *kvs, int didx, const void *key);
 hashset *kvstoreGetHashset(kvstore *kvs, int didx);
 

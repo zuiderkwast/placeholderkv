@@ -150,7 +150,7 @@ robj *createStringObject(const char *ptr, size_t len) {
         return createRawStringObject(ptr, len);
 }
 
-const sds valkeyGetKey(const valkey *val) {
+sds valkeyGetKey(const valkey *val) {
     unsigned char *data = (void *)(val + 1);
     if (val->hasexpire) {
         /* Skip expire field */
@@ -195,7 +195,6 @@ static void objectSetKey(robj *val, const sds key) {
     }
     assert(*(sds *)data == NULL);
     memcpy((void *)data, (void *)&dup, sizeof(void *));
-    return val;
 }
 
 /* Converts (updates, possibly reallocates) 'val' to a valkey object by
@@ -264,7 +263,7 @@ valkey *objectConvertToValkey(robj *val, const sds key) {
         sh->buf[val_len] = '\0';
 
         o->ptr = sh->buf;
-        decrRefcount(val);
+        decrRefCount(val);
         return o;
     } else {
         /* Convert in place. If there are multiple references to it, they're not
@@ -1664,7 +1663,6 @@ void memoryCommand(client *c) {
         };
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr, "usage") && c->argc >= 3) {
-        dictEntry *de;
         long long samples = OBJ_COMPUTE_SIZE_DEF_SAMPLES;
         for (int j = 3; j < c->argc; j++) {
             if (!strcasecmp(c->argv[j]->ptr, "samples") && j + 1 < c->argc) {
@@ -1680,12 +1678,12 @@ void memoryCommand(client *c) {
                 return;
             }
         }
-        if ((de = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
+        valkey *obj = dbFind(c->db, c->argv[2]->ptr);
+        if (obj == NULL) {
             addReplyNull(c);
             return;
         }
-        size_t usage = objectComputeSize(c->argv[2], dictGetVal(de), samples, c->db->id);
-        usage += dictEntryMemUsage(de);
+        size_t usage = objectComputeSize(c->argv[2], obj, samples, c->db->id);
         addReplyLongLong(c, usage);
     } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();

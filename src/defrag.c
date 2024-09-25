@@ -637,8 +637,13 @@ void defragStream(serverDb *db, valkey *ob) {
  */
 void defragModule(serverDb *db, valkey *obj) {
     serverAssert(obj->type == OBJ_MODULE);
-
-    if (!moduleDefragValue(valkeyGetKey(obj), obj, db->id)) defragLater(db, obj);
+    void *sds_key_passed_as_robj = valkeyGetKey(obj);
+    /* Fun fact (and a bug since forever): The key is passed to
+     * moduleDefragValue as an sds string, but the parameter is declared to be
+     * an robj and it's passed as such to the module type defrag callbacks.
+     * Nobody can ever have used this, i.e. accessed the key name in the defrag
+     * or free_effort module type callbacks. */
+    if (!moduleDefragValue(sds_key_passed_as_robj, obj, db->id)) defragLater(db, obj);
 }
 
 /* for each key we scan in the main dict, this function will attempt to defrag
@@ -653,7 +658,7 @@ void defragKey(defragCtx *ctx, valkey **elemref) {
     /* Find the pointer in the expire table to this object, if any. */
     /* TODO: Only lookup the expire table when the object has actually been
      * reallocated. A trick is hashsetFindRefByKeyAndOldValue(s, key, ob). */
-    valkey **expireref = NULL;
+    void **expireref = NULL;
     if (valkeyGetExpire(ob) >= 0) {
         expireref = kvstoreHashsetFindRef(db->expires, slot, valkeyGetKey(ob));
         serverAssert(expireref != NULL);
@@ -745,18 +750,18 @@ float getAllocatorFragmentation(size_t *out_frag_bytes) {
 }
 
 /* Defrag scan callback for the pubsub dictionary. */
-void defragPubsubScanCallback(void *privdata, const dictEntry *de) {
+void defragPubsubScanCallback(void *privdata, void *elemref) {
     defragCtx *ctx = privdata;
     defragPubSubCtx *pubsub_ctx = ctx->privdata;
-    kvstore *pubsub_channels = pubsub_ctx->pubsub_channels;
-    robj *newchannel, *channel = dictGetKey(de);
-    dict *newclients, *clients = dictGetVal(de);
+    void **channel_dict_ref = (void **)elemref;
+    dict *newclients, *clients = *channel_dict_ref;
+    robj *newchannel, *channel = *(robj **)clients->metadata;
 
     /* Try to defrag the channel name. */
     serverAssert(channel->refcount == (int)dictSize(clients) + 1);
     newchannel = activeDefragStringObEx(channel, dictSize(clients) + 1);
     if (newchannel) {
-        kvstoreDictSetKey(pubsub_channels, ctx->slot, (dictEntry *)de, newchannel);
+        *(robj **)clients->metadata = newchannel;
 
         /* The channel name is shared by the client's pubsub(shard) and server's
          * pubsub(shard), after defraging the channel name, we need to update
@@ -773,8 +778,9 @@ void defragPubsubScanCallback(void *privdata, const dictEntry *de) {
     }
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */
-    if ((newclients = dictDefragTables(clients)))
-        kvstoreDictSetVal(pubsub_channels, ctx->slot, (dictEntry *)de, newclients);
+    if ((newclients = dictDefragTables(clients))) {
+        *channel_dict_ref = newchannel;
+    }
 
     server.stat_active_defrag_scanned++;
 }
@@ -806,7 +812,13 @@ int defragLaterItem(valkey *ob, unsigned long *cursor, long long endtime, int db
         } else if (ob->type == OBJ_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
-            return moduleLateDefrag(valkeyGetKey(ob), ob, cursor, endtime, dbid);
+            void *sds_key_passed_as_robj = valkeyGetKey(ob);
+            /* Fun fact (and a bug since forever): The key is passed to
+             * moduleLateDefrag as an sds string, but the parameter is declared
+             * to be an robj and it's passed as such to the module type defrag
+             * callbacks. Nobody can ever have used this, i.e. accessed the key
+             * name in the defrag module type callback. */
+            return moduleLateDefrag(sds_key_passed_as_robj, ob, cursor, endtime, dbid);
         } else {
             *cursor = 0; /* object type may have changed since we schedule it for later */
         }
@@ -851,7 +863,7 @@ int defragLaterStep(serverDb *db, int slot, long long endtime) {
 
         /* each time we enter this function we need to fetch the object again (if it still exists) */
         valkey *ob = NULL;
-        kvstoreHashtabFind(db->keys, slot, defrag_later_current_key, (void **)&ob);
+        kvstoreHashsetFind(db->keys, slot, defrag_later_current_key, (void **)&ob);
         key_defragged = server.stat_active_defrag_hits;
         do {
             int quit = 0;
@@ -1024,7 +1036,7 @@ void activeDefragCycle(void) {
         /* This array of structures holds the parameters for all defragmentation stages. */
         typedef struct defragStage {
             kvstore *kvs;
-            hashsetScanFunction *scanfn;
+            hashsetScanFunction scanfn;
             void *privdata;
         } defragStage;
         defragStage defrag_stages[] = {
@@ -1049,8 +1061,8 @@ void activeDefragCycle(void) {
             if (!defrag_later_item_in_progress) {
                 /* Continue defragmentation from the previous stage.
                  * If slot is -1, it means this stage starts from the first non-empty slot. */
-                if (slot == -1) slot = kvstoreGetFirstNonEmptyDictIndex(current_stage->kvs);
-                defrag_cursor = kvstoreHashtabScan(current_stage->kvs, slot, defrag_cursor, current_stage->scanfn,
+                if (slot == -1) slot = kvstoreGetFirstNonEmptyHashsetIndex(current_stage->kvs);
+                defrag_cursor = kvstoreHashsetScan(current_stage->kvs, slot, defrag_cursor, current_stage->scanfn,
                                                    &(defragCtx){current_stage->privdata, slot}, HASHSET_SCAN_EMIT_REF);
             }
 
@@ -1062,7 +1074,7 @@ void activeDefragCycle(void) {
                 }
 
                 /* Move to the next slot in the current stage. If we've reached the end, move to the next stage. */
-                if ((slot = kvstoreGetNextNonEmptyDictIndex(current_stage->kvs, slot)) == -1) defrag_stage++;
+                if ((slot = kvstoreGetNextNonEmptyHashsetIndex(current_stage->kvs, slot)) == -1) defrag_stage++;
                 defrag_later_item_in_progress = 0;
             }
 

@@ -2628,8 +2628,8 @@ extern dictType objectKeyHeapPointerValueDictType;
 extern dictType setDictType;
 extern dictType BenchmarkDictType;
 extern dictType zsetDictType;
-extern dictType kvstoreKeysHashsetType;
-extern dictType kvstoreExpiresHashsetType;
+extern hashsetType kvstoreKeysHashsetType;
+extern hashsetType kvstoreExpiresHashsetType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern dictType hashDictType;
 extern dictType stringSetDictType;
@@ -2637,7 +2637,7 @@ extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern dictType clientDictType;
 extern dictType objToDictDictType;
-extern dictType kvstoreChannelHashsetType;
+extern hashsetType kvstoreChannelHashsetType;
 extern dictType modulesDictType;
 extern dictType sdsReplyDictType;
 extern dictType keylistDictType;
@@ -3022,7 +3022,7 @@ static inline int canUseSharedObject(void) {
 /* Objects with key attached, AKA valkey objects */
 valkey *objectConvertToValkey(robj *val, const sds key);
 valkey *valkeyCreate(robj *val, const sds key);
-const sds valkeyGetKey(const valkey *val);
+sds valkeyGetKey(const valkey *val);
 long long valkeyGetExpire(const valkey *val);
 void valkeySetExpire(valkey *val, long long expire);
 
@@ -3351,10 +3351,10 @@ int calculateKeySlot(sds key);
 /* kvstore wrappers */
 int dbExpand(serverDb *db, uint64_t db_size, int try_expand);
 int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand);
-dictEntry *dbFind(serverDb *db, void *key);
-dictEntry *dbFindExpires(serverDb *db, void *key);
+valkey *dbFind(serverDb *db, void *key);
+valkey *dbFindExpires(serverDb *db, void *key);
 unsigned long long dbSize(serverDb *db);
-unsigned long long dbScan(serverDb *db, unsigned long long cursor, dictScanFunction *scan_cb, void *privdata);
+unsigned long long dbScan(serverDb *db, unsigned long long cursor, hashsetScanFunction scan_cb, void *privdata);
 
 /* Set data type */
 robj *setTypeCreate(sds value, size_t size_hint);
@@ -3533,9 +3533,9 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long lo
 #define LOOKUP_NOEFFECTS \
     (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE) /* Avoid any effects from fetching the key */
 
-void dbAdd(serverDb *db, robj *key, robj *val);
+valkey *dbAdd(serverDb *db, robj *key, robj *val);
 int dbAddRDBLoad(serverDb *db, sds key, robj *val);
-void dbReplaceValue(serverDb *db, robj *key, robj *val);
+valkey *dbReplaceValue(serverDb *db, robj *key, robj *val);
 
 #define SETKEY_KEEPTTL 1
 #define SETKEY_NO_SIGNAL 2
@@ -3552,12 +3552,12 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
 #define EMPTYDB_NO_FLAGS 0           /* No flags. */
 #define EMPTYDB_ASYNC (1 << 0)       /* Reclaim memory in another thread. */
 #define EMPTYDB_NOFUNCTIONS (1 << 1) /* Indicate not to flush the functions. */
-long long emptyData(int dbnum, int flags, void(callback)(dict *));
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(dict *));
+long long emptyData(int dbnum, int flags, void(callback)(hashset *));
+long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashset *));
 void flushAllDataAndResetRDB(int flags);
 long long dbTotalServerKeyCount(void);
 serverDb *initTempDb(void);
-void discardTempDb(serverDb *tempDb, void(callback)(dict *));
+void discardTempDb(serverDb *tempDb, void(callback)(hashset *));
 
 
 int selectDb(client *c, int id);

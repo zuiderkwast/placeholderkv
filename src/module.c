@@ -10878,10 +10878,10 @@ typedef struct ValkeyModuleScanCursor {
     int done;
 } ValkeyModuleScanCursor;
 
-static void moduleScanCallback(void *privdata, const dictEntry *de) {
+static void moduleScanCallback(void *privdata, void *element) {
     ScanCBData *data = privdata;
-    sds key = dictGetKey(de);
-    robj *val = dictGetVal(de);
+    valkey *val = element;
+    sds key = valkeyGetKey(val);
     ValkeyModuleString *keyname = createObject(OBJ_STRING, sdsdup(key));
 
     /* Setup the key handle. */

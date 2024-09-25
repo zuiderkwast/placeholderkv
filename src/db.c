@@ -54,7 +54,7 @@ typedef enum {
 
 keyStatus expireIfNeeded(serverDb *db, robj *key, int flags);
 int keyIsExpired(serverDb *db, robj *key);
-static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, void **oldref);
+static valkey *dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, void **oldref);
 static int getKVStoreIndexForKey(sds key);
 
 /* Update LFU when an object is accessed.
@@ -208,15 +208,16 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static valkey *dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_existing) {
     int dict_index = getKVStoreIndexForKey(key->ptr);
-    void **oldref = kvstoreFindRef(db->keys, slot, key->ptr);
+    void **oldref = kvstoreHashsetFindRef(db->keys, dict_index, key->ptr);
     if (oldref != NULL && update_if_existing) {
+        //FIXME? OK?
         dbSetValue(db, key, val, 1, oldref);
-        return;
+        return val;
     }
     serverAssertWithInfo(NULL, key, oldref == NULL);
 
     /* Not existing. Convert val to valkey object and insert. */
-    val = objectConvertToValkey(val, key);
+    val = objectConvertToValkey(val, key->ptr);
     initObjectLRUOrLFU(val);
     kvstoreHashsetAdd(db->keys, dict_index, val);
     signalKeyAsReady(db, key, val->type);
@@ -287,8 +288,9 @@ int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
 }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
- * count of the new value is up to the caller.
- * This function does not modify the expire time of the existing key.
+ * counter of the new value is up to the caller. The 'val' may be reallocated
+ * and the new pointer is returned. This function does not modify the expire
+ * time of the existing key.
  *
  * The 'overwrite' flag is an indication whether this is done as part of a
  * complete replacement of their key, which can be thought as a deletion and
@@ -300,10 +302,10 @@ int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
  * value should be stored.
  *
  * The program is aborted if the key was not already present. */
-static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, void **oldref) {
+static valkey *dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, void **oldref) {
     if (oldref == NULL) {
         int dict_index = getKVStoreIndexForKey(key->ptr);
-        oldref = kvstoreFindRef(db->keys, dict_index, key->ptr);
+        oldref = kvstoreHashsetFindRef(db->keys, dict_index, key->ptr);
     }
     serverAssertWithInfo(NULL, key, oldref != NULL);
     valkey *old = *oldref;
@@ -334,7 +336,8 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, void *
     long long expire = valkeyGetExpire(old);
     if (expire >= 0) {
         valkeySetExpire(new, expire);
-        void **expireref = kvstoreFindRef(db->expires, dict_index, key->ptr);
+        int dict_index = getKVStoreIndexForKey(key->ptr);
+        void **expireref = kvstoreHashsetFindRef(db->expires, dict_index, key->ptr);
         serverAssert(expireref != NULL);
         *expireref = new;
     }
@@ -346,12 +349,13 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, void *
     } else {
         decrRefCount(old);
     }
+    return new;
 }
 
 /* Replace an existing key with a new value, we just replace value and don't
  * emit any events */
-void dbReplaceValue(serverDb *db, robj *key, robj *val) {
-    dbSetValue(db, key, val, 0, NULL);
+valkey *dbReplaceValue(serverDb *db, robj *key, robj *val) {
+    return dbSetValue(db, key, val, 0, NULL);
 }
 
 /* High level Set operation. This function can be used in order to set
@@ -402,7 +406,7 @@ robj *dbRandomKey(serverDb *db) {
         sds key;
         robj *keyobj;
         int randomSlot = kvstoreGetFairRandomHashsetIndex(db->keys);
-        int ok = kvstoreHastabFairRandomElement(db->keys, randomSlot, (void **)&valkey);
+        int ok = kvstoreHashsetFairRandomElement(db->keys, randomSlot, (void **)&valkey);
         if (!ok) return NULL;
 
         key = valkeyGetKey(valkey);
@@ -442,21 +446,21 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
         moduleNotifyKeyUnlink(key, val, db->id, flags);
         /* We want to try to unblock any module clients or clients using a blocking XREADGROUP */
         signalDeletedKeyAsReady(db, key, val->type);
+
+        /* Delete from keys and expires tables. This will not free the object.
+         * (The expires table has no destructor callback.) */
+        kvstoreHashsetTwoPhasePopDelete(db->keys, dict_index, plink);
+        kvstoreHashsetDelete(db->expires, dict_index, key->ptr);
+
         /* We should call decr before freeObjAsync. If not, the refcount may be
          * greater than 1, so freeObjAsync doesn't work */
         decrRefCount(val);
         if (async) {
-            /* Because of dbUnshareStringValue, the val in db may change. */
-            /* freeObjAsync(key, dictGetVal(de), db->id); */
-            /* kvstoreDictSetVal(db->keys, dict_index, de, NULL); */
-            /* TODO: We don't have a dict entry. Can we free obj->ptr
-             * asynchronously and set obj->ptr = NULL here? */
+            freeObjAsync(key, val, db->id);
+        } else {
+            decrRefCount(val);
         }
-        /* Deleting an entry from the expires dict will not free the sds of
-         * the key, because it is shared with the main dictionary. */
-        kvstoreDictDelete(db->expires, dict_index, key->ptr);
 
-        kvstoreDictTwoPhasePopDelete(db->keys, dict_index, de, plink);
         return 1;
     } else {
         return 0;
@@ -524,7 +528,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
  * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(dict *)) {
+long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashset *)) {
     long long removed = 0;
     int startdb, enddb;
 
@@ -566,7 +570,7 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
  * On success the function returns the number of keys removed from the
  * database(s). Otherwise -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
-long long emptyData(int dbnum, int flags, void(callback)(dict *)) {
+long long emptyData(int dbnum, int flags, void(callback)(hashset *)) {
     int async = (flags & EMPTYDB_ASYNC);
     int with_functions = !(flags & EMPTYDB_NOFUNCTIONS);
     ValkeyModuleFlushInfoV1 fi = {VALKEYMODULE_FLUSHINFO_VERSION, !async, dbnum};
@@ -621,7 +625,7 @@ serverDb *initTempDb(void) {
 }
 
 /* Discard tempDb, this can be slow (similar to FLUSHALL), but it's always async. */
-void discardTempDb(serverDb *tempDb, void(callback)(dict *)) {
+void discardTempDb(serverDb *tempDb, void(callback)(hashset *)) {
     int async = 1;
 
     /* Release temp DBs. */
@@ -902,6 +906,32 @@ int objectTypeCompare(robj *o, long long target) {
     else
         return 1;
 }
+
+/* Hashset scan callback used by scanCallback when scanning the keyspace. */
+void keysScanCallback(void *privdata, void *element) {
+    scanData *data = (scanData *)privdata;
+    valkey *obj = element;
+    data->sampled++;
+
+    /* Filter an element if it isn't the type we want. */
+    if (data->type != LLONG_MAX) {
+        if (!objectTypeCompare(obj, data->type)) return;
+    }
+
+    sds key = valkeyGetKey(obj);
+
+    /* Filter element if its key does not match the pattern. */
+    if (data->pattern) {
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, sdslen(key), 0)) {
+            return;
+        }
+    }
+
+    /* Keep this key. */
+    list *keys = data->keys;
+    listAddNodeTail(keys, key);
+}
+
 /* This callback is used by scanGenericCommand in order to collect elements
  * returned by the dictionary iterator into a list. */
 void scanCallback(void *privdata, const dictEntry *de) {
@@ -912,14 +942,9 @@ void scanCallback(void *privdata, const dictEntry *de) {
     sds key = NULL;
     data->sampled++;
 
-    /* o and typename can not have values at the same time. */
-    serverAssert(!((data->type != LLONG_MAX) && o));
-
-    /* Filter an element if it isn't the type we want. */
-    if (!o && data->type != LLONG_MAX) {
-        robj *rval = dictGetVal(de);
-        if (!objectTypeCompare(rval, data->type)) return;
-    }
+    /* This callback is only used for scanning elements within a key (hash
+     * fields, set elements, etc.) so o must be set here. */
+    serverAssert(o != NULL);
 
     /* Filter element if it does not match the pattern. */
     sds keysds = dictGetKey(de);
@@ -929,9 +954,7 @@ void scanCallback(void *privdata, const dictEntry *de) {
         }
     }
 
-    if (o == NULL) {
-        key = keysds;
-    } else if (o->type == OBJ_SET) {
+    if (o->type == OBJ_SET) {
         key = keysds;
     } else if (o->type == OBJ_HASH) {
         key = keysds;
@@ -1150,9 +1173,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                // FIXME
-                cursor = 0;
-                // cursor = kvstoreScan(c->db->keys, cursor, onlydidx, scanCallback, NULL, &data);
+                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, NULL, &data);
             } else {
                 cursor = dictScan(ht, cursor, scanCallback, &data);
             }
@@ -1205,6 +1226,9 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     }
 
     /* Step 3: Filter the expired keys */
+    /* TODO: Do this in the keysScanCallback where we have the valkey objects
+     * that contain the TTL (or add valkey object to the list instead of just
+     * the keys). Then we don't need to look them up again here. */
     if (o == NULL && listLength(keys)) {
         robj kobj;
         listIter li;
@@ -1406,8 +1430,9 @@ void moveCommand(client *c) {
         return;
     }
     robj *new = dbAdd(dst, c->argv[1], o);
+    UNUSED(new); // FIXME
     if (expire != -1) setExpire(c, dst, c->argv[1], expire);
-    incrRefCount(o);
+    incrRefCount(o); // FIXME: Do this before dbAdd?
 
     /* OK! key moved, free the entry in the source DB */
     dbDelete(src, c->argv[1]);
@@ -1528,9 +1553,8 @@ void scanDatabaseForReadyKeys(serverDb *db) {
     dictIterator *di = dictGetSafeIterator(db->blocking_keys);
     while ((de = dictNext(di)) != NULL) {
         robj *key = dictGetKey(de);
-        dictEntry *kde = dbFind(db, key->ptr);
-        if (kde) {
-            robj *value = dictGetVal(kde);
+        valkey *value = dbFind(db, key->ptr);
+        if (value) {
             signalKeyAsReady(db, key, value->type);
         }
     }
@@ -1548,17 +1572,15 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
         int existed = 0, exists = 0;
         int original_type = -1, curr_type = -1;
 
-        dictEntry *kde = dbFind(emptied, key->ptr);
-        if (kde) {
-            robj *value = dictGetVal(kde);
+        valkey *value = dbFind(emptied, key->ptr);
+        if (value) {
             original_type = value->type;
             existed = 1;
         }
 
         if (replaced_with) {
-            kde = dbFind(replaced_with, key->ptr);
-            if (kde) {
-                robj *value = dictGetVal(kde);
+            value = dbFind(replaced_with, key->ptr);
+            if (value) {
                 curr_type = value->type;
                 exists = 1;
             }
@@ -1695,7 +1717,13 @@ void swapdbCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 int removeExpire(serverDb *db, robj *key) {
-    return kvstoreHashsetDelete(db->expires, getKVStoreIndexForKey(key->ptr), key->ptr);
+    valkey *val;
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    if (kvstoreHashsetPop(db->expires, dict_index, key, (void **)&val)) {
+        valkeySetExpire(val, -1);
+        return 1;
+    }
+    return 0;
 }
 
 /* Set an expire to the specified key. If the expire is set in the context
@@ -1703,17 +1731,18 @@ int removeExpire(serverDb *db, robj *key) {
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid. */
 void setExpire(client *c, serverDb *db, robj *key, long long when) {
-    dictEntry *kde, *de, *existing;
+    /* TODO: Add val as a parameter to this function, to avoid looking it up. */
+    valkey *val;
 
-    /* Reuse the sds from the main dict in the expire dict */
+    /* Reuse the object from the main dict in the expire dict */
     int dict_index = getKVStoreIndexForKey(key->ptr);
-    int found = kvstoreHashsetFind(db->keys, dict_index, key->ptr, &existing); //FIXME
-    serverAssertWithInfo(NULL, key, kde != NULL);
-    de = kvstoreDictAddRaw(db->expires, dict_index, dictGetKey(kde), &existing);
-    if (existing) {
-        dictSetSignedIntegerVal(existing, when);
-    } else {
-        dictSetSignedIntegerVal(de, when);
+    int found = kvstoreHashsetFind(db->keys, dict_index, key->ptr, (void **)&val);
+    serverAssertWithInfo(NULL, key, found);
+    long long old_when = valkeyGetExpire(val);
+    valkeySetExpire(val, when);
+    if (old_when < 0) {
+        int added = kvstoreHashsetAdd(db->expires, dict_index, val);
+        serverAssert(added);
     }
 
     int writable_replica = server.primary_host && server.repl_replica_ro == 0;
@@ -1723,11 +1752,11 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
 long long getExpire(serverDb *db, robj *key) {
-    dictEntry *de;
+    valkey *val;
 
-    if ((de = dbFindExpires(db, key->ptr)) == NULL) return -1;
+    if ((val = dbFindExpires(db, key->ptr)) == NULL) return -1;
 
-    return dictGetSignedIntegerVal(de);
+    return valkeyGetExpire(val);
 }
 
 /* Delete the specified expired key and propagate expire. */
@@ -1897,10 +1926,11 @@ static int dbExpandSkipSlot(int slot) {
  * In cluster mode resizes all individual dictionaries for slots that this node owns.
  *
  * Based on the parameter `try_expand`, appropriate dict expand API is invoked.
- * if try_expand is set to 1, `dictTryExpand` is used else `dictExpand`.
- * The return code is either `DICT_OK`/`DICT_ERR` for both the API(s).
- * `DICT_OK` response is for successful expansion. However ,`DICT_ERR` response signifies failure in allocation in
- * `dictTryExpand` call and in case of `dictExpand` call it signifies no expansion was performed.
+ * if try_expand is non-zero, `hashsetTryExpand` is used else `hashsetExpand`.
+ *
+ * Returns C_OK or C_ERR. C_OK response is for successful expansion. C_ERR
+ * signifies failure in allocation if try_expand is non-zero. Otherwise it
+ * signifies that no expansion was performed.
  */
 static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand) {
     int ret;
@@ -1928,7 +1958,7 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
 
 static valkey *dbFindGeneric(kvstore *kvs, void *key) {
     void *existing = NULL;
-    kvstoreDictFind(kvs, server.cluster_enabled ? getKeySlot(key) : 0, key, &existing);
+    kvstoreHashsetFind(kvs, server.cluster_enabled ? getKeySlot(key) : 0, key, &existing);
     return existing;
 }
 
@@ -1944,7 +1974,7 @@ unsigned long long dbSize(serverDb *db) {
     return kvstoreSize(db->keys);
 }
 
-unsigned long long dbScan(serverDb *db, unsigned long long cursor, dictScanFunction *scan_cb, void *privdata) {
+unsigned long long dbScan(serverDb *db, unsigned long long cursor, hashsetScanFunction scan_cb, void *privdata) {
     return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata);
 }
 

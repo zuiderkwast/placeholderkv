@@ -150,7 +150,7 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
     for (j = 0; j < count; j++) {
         unsigned long long idle;
         valkey *o = samples[j];
-        sds key = dictGetKey(o);
+        sds key = valkeyGetKey(o);
 
         /* Calculate the idle time according to the policy. This is called
          * idle just because the code initially handled LRU, but is in fact

@@ -912,7 +912,7 @@ void clusterCommand(client *c) {
         valkey *valkey = NULL;
         kvs_di = kvstoreGetHashsetIterator(server.db->keys, slot);
         for (unsigned int i = 0; i < numkeys; i++) {
-            serverAssert(kvstoreHashsetIteratorNext(kvs_di, (void **)&valkey);
+            serverAssert(kvstoreHashsetIteratorNext(kvs_di, (void **)&valkey));
             sds sdskey = valkeyGetKey(valkey);
             addReplyBulkCBuffer(c, sdskey, sdslen(sdskey));
         }

@@ -490,7 +490,7 @@ dictType zsetDictType = {
 };
 
 uint64_t hashsetSdsHash(const void *key) {
-    return hashsetGenHashFunction((unsigned char *)key, sdslen((char *)key));
+    return hashsetGenHashFunction((const char *)key, sdslen((char *)key));
 }
 
 const void *hashsetValkeyObjectGetKey(const void *element) {
@@ -499,10 +499,12 @@ const void *hashsetValkeyObjectGetKey(const void *element) {
 
 int hashsetSdsKeyCompare(hashset *t, const void *key1, const void *key2) {
     UNUSED(t);
-    return sdslen(key1) != sdslen(key2) || sdscmp(key1, key2);
+    const sds sds1 = (const sds)key1, sds2 = (const sds)key2;
+    return sdslen(sds1) != sdslen(sds2) || sdscmp(sds1, sds2);
 }
 
 int hashsetObjKeyCompare(hashset *t, const void *key1, const void *key2) {
+    UNUSED(t);
     const robj *o1 = key1, *o2 = key2;
     return hashsetSdsKeyCompare(t, o1->ptr, o2->ptr);
 }
@@ -516,7 +518,7 @@ void hashsetObjectDestructor(hashset *t, void *val) {
 /* Kvstore->keys, keys are sds strings, vals are Objects. */
 hashsetType kvstoreKeysHashsetType = {
     .elementGetKey = hashsetValkeyObjectGetKey,
-    .hashFunction =  hashsetSdsHash,
+    .hashFunction = hashsetSdsHash,
     .keyCompare = hashsetSdsKeyCompare,
     .elementDestructor = hashsetObjectDestructor,
     /* .resizeAllowed = dictResizeAllowed, */
@@ -528,7 +530,7 @@ hashsetType kvstoreKeysHashsetType = {
 /* Kvstore->expires */
 hashsetType kvstoreExpiresHashsetType = {
     .elementGetKey = hashsetValkeyObjectGetKey,
-    .hashFunction =  hashsetSdsHash,
+    .hashFunction = hashsetSdsHash,
     .keyCompare = hashsetSdsKeyCompare,
     .elementDestructor = NULL, /* shared with keyspace table */
     /* .hashsetResizeAllowed = TODO, */
@@ -601,7 +603,9 @@ const void *hashsetChannelsDictGetKey(const void *element) {
 
 void hashsetChannelsDictDestructor(hashset *t, void *element) {
     UNUSED(t);
-    robj *channel = hashsetChannelsDictGetKey(element);
+    dict *d = element;
+    robj *channel = *((void **)d->metadata);
+    //robj *channel = (robj *)hashsetChannelsDictGetKey(element);
     decrRefCount(channel);
     dictRelease(element);
 }
@@ -684,7 +688,7 @@ dictType clientDictType = {
     dictClientHash,       /* hash function */
     NULL,                 /* key dup */
     dictClientKeyCompare, /* key compare */
-    dictMetadataBytes = clientSetDictTypeMetadataBytes,
+    .dictMetadataBytes = clientSetDictTypeMetadataBytes,
     .no_value = 1         /* no values in this dict */
 };
 

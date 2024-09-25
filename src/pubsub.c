@@ -258,7 +258,6 @@ void unmarkClientAsPubSub(client *c) {
 /* Subscribe a client to a channel. Returns 1 if the operation succeeded, or
  * 0 if the client was already subscribed to that channel. */
 int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
-    //dictEntry *de, *existing;
     dict *clients = NULL;
     int retval = 0;
     unsigned int slot = 0;
@@ -277,7 +276,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
 
         if (pos == NULL) {
             clients = existing;
-            channel = *(robj **)clients->metadata);
+            channel = *(robj **)clients->metadata;
         } else {
             /* Store pointer to channel name in the dict's metadata. */
             clients = dictCreate(&clientDictType);
