@@ -59,9 +59,9 @@ robj *createObject(int type, void *ptr) {
     o->hasembkey = 0;    /* No embedded actual key contents. */
     o->hasembkeyptr = 1; /* There's an embedded key pointer field. */
     unsigned char *data = (void *)(o + 1);
-    long long expire = -1;                            /* -1 means no expire */
-    memcpy(data, &expire, sizeof(expire));            /* expire = -1 */
-    memset(data + sizeof(expire), 0, sizeof(void *)); /* embkeyptr = NULL */
+    *(long long *)data = -1; /* -1 means no expire. */
+    data += sizeof(long long);
+    *(void **)data = NULL; /* Key pointer. */
     return o;
 }
 
@@ -170,7 +170,7 @@ sds valkeyGetKey(const valkey *val) {
 long long valkeyGetExpire(const valkey *val) {
     unsigned char *data = (void *)(val + 1);
     if (val->hasexpire) {
-        return (long long)data;
+        return *(long long *)data;
     } else {
         return -1;
     }

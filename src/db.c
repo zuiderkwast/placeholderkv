@@ -335,7 +335,6 @@ static valkey *dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, voi
     /* Replace the old value at its location in the expire space. */
     long long expire = valkeyGetExpire(old);
     if (expire >= 0) {
-        serverLog(LL_WARNING, "Old expire: %lld", expire);
         valkeySetExpire(new, expire);
         int dict_index = getKVStoreIndexForKey(key->ptr);
         void **expireref = kvstoreHashsetFindRef(db->expires, dict_index, key->ptr);
