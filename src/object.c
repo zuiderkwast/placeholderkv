@@ -180,13 +180,11 @@ void valkeySetExpire(valkey *val, long long expire) {
     unsigned char *data = (void *)(val + 1);
     assert(val->hasexpire);
     *(long long *)data = expire;
-    //memcpy((void *)data, (void *)&expire, sizeof(long long));
 }
 
 /* Attaches a key to the object, without reallocating the object. */
 static void objectSetKey(robj *val, const sds key) {
     assert(val->hasembkeyptr && !val->hasembkey && valkeyGetKey(val) == NULL);
-    sds dup = sdsdup(key);
 
     /* Find the correct location in val's data field. */
     unsigned char *data = (void *)(val + 1);
@@ -194,8 +192,9 @@ static void objectSetKey(robj *val, const sds key) {
         /* Skip expire field */
         data += sizeof(long long);
     }
-    assert(*(sds *)data == NULL);
-    memcpy((void *)data, (void *)&dup, sizeof(void *));
+    sds oldkey = *(sds *)data;
+    if (oldkey != NULL) sdsfree(oldkey);
+    *(sds *)data = sdsdup(key);
 }
 
 /* Converts (updates, possibly reallocates) 'val' to a valkey object by
@@ -343,7 +342,7 @@ robj *createStringObjectFromLongLong(long long value) {
  * configured to evict based on LFU/LRU, so we want LFU/LRU values
  * specific for each key. */
 robj *createStringObjectFromLongLongForValue(long long value) {
-    if (server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS)) {
+    if (canUseSharedObject()) {
         /* If the maxmemory policy permits, we can still return shared integers */
         return createStringObjectFromLongLongWithOptions(value, LL2STROBJ_AUTO);
     } else {

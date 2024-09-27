@@ -210,8 +210,7 @@ static valkey *dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_e
     int dict_index = getKVStoreIndexForKey(key->ptr);
     void **oldref = kvstoreHashsetFindRef(db->keys, dict_index, key->ptr);
     if (oldref != NULL && update_if_existing) {
-        //FIXME? OK?
-        dbSetValue(db, key, val, 1, oldref);
+        val = dbSetValue(db, key, val, 1, oldref);
         return val;
     }
     serverAssertWithInfo(NULL, key, oldref == NULL);
@@ -225,8 +224,6 @@ static valkey *dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_e
     return val;
 }
 
-/* FIXME: Go through all calls to dbAdd and make sure they use the returned
- * value when necessary. */
 valkey *dbAdd(serverDb *db, robj *key, robj *val) {
     return dbAddInternal(db, key, val, 0);
 }
@@ -1429,13 +1426,14 @@ void moveCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    robj *new = dbAdd(dst, c->argv[1], o);
-    UNUSED(new); // FIXME
-    if (expire != -1) setExpire(c, dst, c->argv[1], expire);
-    incrRefCount(o); // FIXME: Do this before dbAdd?
 
-    /* OK! key moved, free the entry in the source DB */
-    dbDelete(src, c->argv[1]);
+    incrRefCount(o);           /* ref counter = 2 */
+    dbDelete(src, c->argv[1]); /* ref counter = 1 */
+
+    o = dbAdd(dst, c->argv[1], o);
+    if (expire != -1) setExpire(c, dst, c->argv[1], expire);
+
+    /* OK! key moved */
     signalModifiedKey(c, src, c->argv[1]);
     signalModifiedKey(c, dst, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "move_from", c->argv[1], src->id);
@@ -1719,8 +1717,9 @@ void swapdbCommand(client *c) {
 int removeExpire(serverDb *db, robj *key) {
     valkey *val;
     int dict_index = getKVStoreIndexForKey(key->ptr);
-    if (kvstoreHashsetPop(db->expires, dict_index, key, (void **)&val)) {
+    if (kvstoreHashsetPop(db->expires, dict_index, key->ptr, (void **)&val)) {
         valkeySetExpire(val, -1);
+        serverAssert(getExpire(db, key) == -1);
         return 1;
     }
     return 0;
@@ -1956,17 +1955,17 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
     return dbExpandGeneric(db->expires, db_size, try_expand);
 }
 
-static valkey *dbFindGeneric(kvstore *kvs, void *key) {
+static valkey *dbFindGeneric(kvstore *kvs, sds key) {
     void *existing = NULL;
     kvstoreHashsetFind(kvs, server.cluster_enabled ? getKeySlot(key) : 0, key, &existing);
     return existing;
 }
 
-valkey *dbFind(serverDb *db, void *key) {
+valkey *dbFind(serverDb *db, sds key) {
     return dbFindGeneric(db->keys, key);
 }
 
-valkey *dbFindExpires(serverDb *db, void *key) {
+valkey *dbFindExpires(serverDb *db, sds key) {
     return dbFindGeneric(db->expires, key);
 }
 

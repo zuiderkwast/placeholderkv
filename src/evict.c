@@ -146,7 +146,7 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
     void *samples[server.maxmemory_samples];
 
     int slot = kvstoreGetFairRandomHashsetIndex(samplekvs);
-    count = kvstoreHashsetSampleElements(samplekvs, slot, samples, server.maxmemory_samples);
+    count = kvstoreHashsetSampleElements(samplekvs, slot, (void **)&samples, server.maxmemory_samples);
     for (j = 0; j < count; j++) {
         unsigned long long idle;
         valkey *o = samples[j];

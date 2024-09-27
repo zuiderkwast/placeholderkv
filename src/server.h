@@ -3014,7 +3014,7 @@ int equalStringObjects(robj *a, robj *b);
 unsigned long long estimateObjectIdleTime(robj *o);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
 static inline int canUseSharedObject(void) {
-    //return server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS);
+    /* We can't use shared objects because we embed the key in the value (robj). */
     return 0;
 }
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
@@ -3351,8 +3351,8 @@ int calculateKeySlot(sds key);
 /* kvstore wrappers */
 int dbExpand(serverDb *db, uint64_t db_size, int try_expand);
 int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand);
-valkey *dbFind(serverDb *db, void *key);
-valkey *dbFindExpires(serverDb *db, void *key);
+valkey *dbFind(serverDb *db, sds key);
+valkey *dbFindExpires(serverDb *db, sds key);
 unsigned long long dbSize(serverDb *db);
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, hashsetScanFunction scan_cb, void *privdata);
 
