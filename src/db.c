@@ -1363,9 +1363,9 @@ void renameGenericCommand(client *c, int nx) {
          * with the same name. */
         dbDelete(c->db, c->argv[2]);
     }
+    dbDelete(c->db, c->argv[1]);
     o = dbAdd(c->db, c->argv[2], o);
     if (expire != -1) setExpire(c, c->db, c->argv[2], expire);
-    dbDelete(c->db, c->argv[1]);
     signalModifiedKey(c, c->db, c->argv[1]);
     signalModifiedKey(c, c->db, c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "rename_from", c->argv[1], c->db->id);
