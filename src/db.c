@@ -108,7 +108,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         int expire_flags = 0;
         if (flags & LOOKUP_WRITE && !is_ro_replica) expire_flags |= EXPIRE_FORCE_DELETE_EXPIRED;
         if (flags & LOOKUP_NOEXPIRE) expire_flags |= EXPIRE_AVOID_DELETE_EXPIRED;
-        if (expireIfNeeded(db, key, expire_flags) != KEY_VALID) {
+        /* FIXME: The valkeyGetExpire check below is a quick-and-dirty
+         * optimization. TODO: Come up with a better abstraction, like passing
+         * val to expireIfNeeded or a new variant of it. */
+        if (valkeyGetExpire(val) != -1 && expireIfNeeded(db, key, expire_flags) != KEY_VALID) {
             /* The key is no longer valid. */
             val = NULL;
         }
@@ -208,12 +211,16 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static valkey *dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_existing) {
     int dict_index = getKVStoreIndexForKey(key->ptr);
-    void **oldref = kvstoreHashsetFindRef(db->keys, dict_index, key->ptr);
-    if (oldref != NULL && update_if_existing) {
-        val = dbSetValue(db, key, val, 1, oldref);
-        return val;
+    void **oldref = NULL;
+    if (update_if_existing) {
+        oldref = kvstoreHashsetFindRef(db->keys, dict_index, key->ptr);
+        if (oldref != NULL) {
+            val = dbSetValue(db, key, val, 1, oldref);
+            return val;
+        }
+    } else {
+        debugServerAssertWithInfo(NULL, key, kvstoreHashsetFindRef(db->keys, dict_index, key->ptr) == NULL);
     }
-    serverAssertWithInfo(NULL, key, oldref == NULL);
 
     /* Not existing. Convert val to valkey object and insert. */
     val = objectConvertToValkey(val, key->ptr);
