@@ -327,7 +327,7 @@ static valkey *dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, voi
         old = *oldref;
     }
     /* Replace the old value at its location in the key space. */
-    valkey *new = valkeyCreate(val, key->ptr);
+    valkey *new = objectConvertToValkey(val, key->ptr);
     *oldref = new;
     /* Replace the old value at its location in the expire space. */
     long long expire = valkeyGetExpire(old);
