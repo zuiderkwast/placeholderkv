@@ -454,7 +454,12 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
         /* Delete from keys and expires tables. This will not free the object.
          * (The expires table has no destructor callback.) */
         kvstoreHashsetTwoPhasePopDelete(db->keys, dict_index, plink);
-        kvstoreHashsetDelete(db->expires, dict_index, key->ptr);
+        if (valkeyGetExpire(val) != -1) {
+            int deleted = kvstoreHashsetDelete(db->expires, dict_index, key->ptr);
+            serverAssert(deleted);
+        } else {
+            debugServerAssert(0 == kvstoreHashsetDelete(db->expires, dict_index, key->ptr));
+        }
 
         /* We should call decr before freeObjAsync. If not, the refcount may be
          * greater than 1, so freeObjAsync doesn't work */
