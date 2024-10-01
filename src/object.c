@@ -471,9 +471,6 @@ void freeStringObject(robj *o) {
     if (o->encoding == OBJ_ENCODING_RAW) {
         sdsfree(o->ptr);
     }
-    if (o->hasembkeyptr) {
-        sdsfree(valkeyGetKey(o));
-    }
 }
 
 void freeListObject(robj *o) {
@@ -550,6 +547,9 @@ void decrRefCount(robj *o) {
         case OBJ_MODULE: freeModuleObject(o); break;
         case OBJ_STREAM: freeStreamObject(o); break;
         default: serverPanic("Unknown object type"); break;
+        }
+        if (o->hasembkeyptr) {
+            sdsfree(valkeyGetKey(o));
         }
         zfree(o);
     } else {
