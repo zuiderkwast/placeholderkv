@@ -143,10 +143,13 @@ static int getAndClearHashsetIndexFromCursor(kvstore *kvs, unsigned long long *c
 static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
     kvs->key_count += delta;
 
-    hashset *d = kvstoreGetHashset(kvs, didx);
-    size_t dsize = hashsetSize(d);
-    int non_empty_hashsets_delta = dsize == 1 ? 1 : dsize == 0 ? -1 : 0;
-    kvs->non_empty_hashsets += non_empty_hashsets_delta;
+    hashset *s = kvstoreGetHashset(kvs, didx);
+    size_t size = hashsetSize(s);
+    if (delta < 0 && size == 0) {
+        kvs->non_empty_hashsets--; /* It became empty. */
+    } else if (delta > 0 && size == (size_t)delta) {
+        kvs->non_empty_hashsets++; /* It was empty before. */
+    }
 
     /* BIT does not need to be calculated when there's only one hashset. */
     if (kvs->num_hashsets == 1) return;
@@ -747,10 +750,14 @@ unsigned long kvstoreHashsetScan(kvstore *kvs,
  * not necessary) or reallocate the memory like realloc() would do. */
 void kvstoreHashsetDefragInternals(kvstore *kvs, void *(*defragfn)(void *)) {
     for (int didx = 0; didx < kvs->num_hashsets; didx++) {
-        hashset **d = kvstoreGetHashsetRef(kvs, didx), *newd;
-        if (!*d) continue;
-        newd = hashsetDefragInternals(*d, defragfn);
-        if (newd) *d = newd;
+        hashset **ref = kvstoreGetHashsetRef(kvs, didx), *new;
+        if (!*ref) continue;
+        new = hashsetDefragInternals(*ref, defragfn);
+        if (new) {
+            *ref = new;
+            kvstoreHashsetMetadata *metadata = hashsetMetadata(new);
+            if (metadata->rehashing_node) metadata->rehashing_node->value = new;
+        }
     }
 }
 
