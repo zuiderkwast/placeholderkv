@@ -418,21 +418,15 @@ uint64_t dictEncObjHash(const void *key) {
     }
 }
 
-/* Return 1 if currently we allow dict to expand. Dict may allocate huge
- * memory to contain hash buckets when dict expands, that may lead the server to
- * reject user's requests or evict some keys, we can stop dict to expand
- * provisionally if used memory will be over maxmemory after dict expands,
- * but to guarantee the performance of the server, we still allow dict to expand
- * if dict load factor exceeds HASHTABLE_MAX_LOAD_FACTOR. */
-int dictResizeAllowed(size_t moreMem, double usedRatio) {
+/* Return 1 if we allow a hash table to expand. It may allocate a huge amount of
+ * memory to contain hash buckets when it expands, that may lead the server to
+ * reject user's requests or evict some keys. We can prevent expansion
+ * provisionally if used memory will be over maxmemory after it expands,
+ * but to guarantee the performance of the server, we still allow it to expand
+ * if the load factor exceeds the hard limit defined in hashset.c. */
+int hashsetResizeAllowed(size_t moreMem, double usedRatio) {
     /* for debug purposes: dict is not allowed to be resized. */
-    if (!server.dict_resizing) return 0;
-
-    if (usedRatio <= HASHTABLE_MAX_LOAD_FACTOR) {
-        return !overMaxmemoryAfterAlloc(moreMem);
-    } else {
-        return 1;
-    }
+    return server.dict_resizing;
 }
 
 const void *hashsetCommandGetKey(const void *element) {
@@ -521,7 +515,7 @@ hashsetType kvstoreKeysHashsetType = {
     .hashFunction = hashsetSdsHash,
     .keyCompare = hashsetSdsKeyCompare,
     .elementDestructor = hashsetObjectDestructor,
-    /* .resizeAllowed = dictResizeAllowed, */
+    .resizeAllowed = hashsetResizeAllowed,
     .rehashingStarted = kvstoreHashsetRehashingStarted,
     .rehashingCompleted = kvstoreHashsetRehashingCompleted,
     .getMetadataSize = kvstoreHashsetMetadataSize,
@@ -533,7 +527,7 @@ hashsetType kvstoreExpiresHashsetType = {
     .hashFunction = hashsetSdsHash,
     .keyCompare = hashsetSdsKeyCompare,
     .elementDestructor = NULL, /* shared with keyspace table */
-    /* .hashsetResizeAllowed = TODO, */
+    .resizeAllowed = hashsetResizeAllowed,
     .rehashingStarted = kvstoreHashsetRehashingStarted,
     .rehashingCompleted = kvstoreHashsetRehashingCompleted,
     .getMetadataSize = kvstoreHashsetMetadataSize,

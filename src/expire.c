@@ -279,7 +279,7 @@ void activeExpireCycle(int type) {
              * is very fast: we are in the cache line scanning a sequential
              * array of NULL pointers, so we can scan a lot more buckets
              * than keys in the same time. */
-            long max_buckets = num * 20;
+            long max_buckets = num * 10;
             long checked_buckets = 0;
 
             int origin_ttl_samples = data.ttl_samples;
