@@ -425,8 +425,13 @@ uint64_t dictEncObjHash(const void *key) {
  * but to guarantee the performance of the server, we still allow it to expand
  * if the load factor exceeds the hard limit defined in hashset.c. */
 int hashsetResizeAllowed(size_t moreMem, double usedRatio) {
-    /* for debug purposes: dict is not allowed to be resized. */
-    return server.dict_resizing;
+    UNUSED(usedRatio);
+
+    /* For debug purposes, not allowed to be resized. */
+    if (!server.dict_resizing) return 0;
+
+    /* Avoid resizing over max memory. */
+    return !overMaxmemoryAfterAlloc(moreMem);
 }
 
 const void *hashsetCommandGetKey(const void *element) {
