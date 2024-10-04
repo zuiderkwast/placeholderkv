@@ -265,10 +265,10 @@ start_server {tags {"maxmemory external:skip"}} {
             # make sure to start with a blank instance
             r flushall
             # Get the current memory limit and calculate a new limit.
-            # We just add 100k to the current memory size so that it is
+            # We just add 400KiB to the current memory size so that it is
             # fast for us to reach that limit.
             set used [s used_memory]
-            set limit [expr {$used+100*1024}]
+            set limit [expr {$used+400*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
             # Now add keys until the limit is almost reached.
