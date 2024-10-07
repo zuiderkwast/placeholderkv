@@ -366,8 +366,9 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                int onlydidx,
                                hashsetScanFunction scan_cb,
                                kvstoreScanShouldSkipHashset *skip_cb,
-                               void *privdata) {
-    unsigned long long _cursor = 0;
+                               void *privdata,
+                               int flags) {
+    unsigned long long next_cursor = 0;
     /* During hash table traversal, 48 upper bits in the cursor are used for positioning in the HT.
      * Following lower bits are used for the hashset index number, ranging from 0 to 2^num_hashsets_bits-1.
      * Hashset index is always 0 at the start of iteration and can be incremented only if there are
@@ -389,20 +390,20 @@ unsigned long long kvstoreScan(kvstore *kvs,
 
     int skip = !d || (skip_cb && skip_cb(d));
     if (!skip) {
-        _cursor = hashsetScan(d, cursor, scan_cb, privdata, 0);
+        next_cursor = hashsetScan(d, cursor, scan_cb, privdata, flags);
         /* In hashsetScan, scan_cb may delete entries (e.g., in active expire case). */
         freeHashsetIfNeeded(kvs, didx);
     }
     /* scanning done for the current hash table or if the scanning wasn't possible, move to the next hashset index. */
-    if (_cursor == 0 || skip) {
+    if (next_cursor == 0 || skip) {
         if (onlydidx >= 0) return 0;
         didx = kvstoreGetNextNonEmptyHashsetIndex(kvs, didx);
     }
     if (didx == -1) {
         return 0;
     }
-    addHashsetIndexToCursor(kvs, didx, &_cursor);
-    return _cursor;
+    addHashsetIndexToCursor(kvs, didx, &next_cursor);
+    return next_cursor;
 }
 
 /*

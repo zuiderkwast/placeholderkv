@@ -1182,7 +1182,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, NULL, &data);
+                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, NULL, &data, 0);
             } else {
                 cursor = dictScan(ht, cursor, scanCallback, &data);
             }
@@ -1986,7 +1986,7 @@ unsigned long long dbSize(serverDb *db) {
 }
 
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, hashsetScanFunction scan_cb, void *privdata) {
-    return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata);
+    return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata, 0);
 }
 
 /* -----------------------------------------------------------------------------

@@ -24,7 +24,8 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                int onlydidx,
                                hashsetScanFunction scan_cb,
                                kvstoreScanShouldSkipHashset *skip_cb,
-                               void *privdata);
+                               void *privdata,
+                               int flags);
 int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashsetIndex *skip_cb);
 int kvstoreGetFairRandomHashsetIndex(kvstore *kvs);
 void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full);
