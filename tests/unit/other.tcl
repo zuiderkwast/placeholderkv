@@ -392,10 +392,6 @@ start_server {tags {"other"}} {
 }
 
 proc table_size {dbnum} {
-    regexp {Hash table 1 stats \(main hash table\):\n *table size: (\d+)} [r DEBUG HTSTATS $dbnum] -> table_size
-    if {[info exists varName]} {
-        return $table_size
-    }
     regexp {Hash table 0 stats \(main hash table\):\n *table size: (\d+)} [r DEBUG HTSTATS $dbnum] -> table_size
     return $table_size
 }
@@ -499,7 +495,7 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
         for {set j 1} {$j <= 128} {incr j} {
             r set "{foo}$j" a
         }
-        assert_match "*table size: 128*" [r debug HTSTATS 0]
+        set table_size [table_size 0]
 
         # disable resizing, the reason for not using slow bgsave is because
         # it will hit the dict_force_resize_ratio.
@@ -509,14 +505,14 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
         for {set j 1} {$j <= 123} {incr j} {
             r del "{foo}$j"
         }
-        assert_match "*table size: 128*" [r debug HTSTATS 0]
+        assert_equal $table_size [table_size 0]
 
         # enable resizing
         r debug dict-resizing 1
 
         # waiting for serverCron to resize the tables
         wait_for_condition 1000 10 {
-            [string match {*table size: 8*} [r debug HTSTATS 0]]
+            [table_size 0] < $table_size
         } else {
             puts [r debug HTSTATS 0]
             fail "hash tables weren't resize."
@@ -530,6 +526,7 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
         for {set j 1} {$j <= 128} {incr j} {
             r set "{alice}$j" a
         }
+        set table_size [table_size 0]
 
         # disable resizing, the reason for not using slow bgsave is because
         # it will hit the dict_force_resize_ratio.
@@ -544,7 +541,7 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
 
         # waiting for serverCron to resize the tables
         wait_for_condition 1000 10 {
-            [string match {*table size: 16*} [r debug HTSTATS 0]]
+            [table_size 0] < $table_size
         } else {
             puts [r debug HTSTATS 0]
             fail "hash tables weren't resize."
