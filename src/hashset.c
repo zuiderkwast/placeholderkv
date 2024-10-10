@@ -623,6 +623,7 @@ static bucket *findBucket(hashset *t, uint64_t hash, const void *key, int *pos_i
         if (t->used[table] == 0) continue;
         size_t mask = expToMask(t->bucketExp[table]);
         size_t bucket_idx = hash & mask;
+        size_t start_bucket_idx = bucket_idx;
         while (1) {
             bucket *b = &t->tables[table][bucket_idx];
             /* Find candidate elements with presence flag set and matching h2 hash. */
@@ -643,6 +644,11 @@ static bucket *findBucket(hashset *t, uint64_t hash, const void *key, int *pos_i
             /* Probe the next bucket? */
             if (!b->everfull) break;
             bucket_idx = nextCursor(bucket_idx, mask);
+            if (bucket_idx == start_bucket_idx) {
+                /* We probed the whole table. This should be extremely rare but
+                 * theoretically it can happen. */
+                break;
+            }
         }
     }
     return NULL;
@@ -1248,13 +1254,19 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
      * in another bucket due to probing, we need to continue to cover the whole
      * probe sequence in the same scan cycle. Otherwise we may miss those
      * elements if they are rehashed before the next scan call. */
-    int in_probe_sequence = 1;
+    int in_probe_sequence = 0;
 
     /* When the cursor reaches zero, may need to continue scanning and advancing
      * the cursor until the probing chain ends, but when we stop, we return 0 to
      * indicate that the full scan is completed. */
     int cursor_passed_zero = 0;
-    while (in_probe_sequence) {
+
+    /* Mask the start cursor to the bigger of the tables, so we can detect if we
+     * come back to the start cursor and break the loop. It can happen if enough
+     * tombstones (in both tables while rehashing) make us continue scanning. */
+    cursor = cursor & (expToMask(t->bucketExp[0]) | expToMask(t->bucketExp[1]));
+    size_t start_cursor = cursor;
+    do {
         in_probe_sequence = 0; /* Set to 1 if an ever-full bucket is scanned. */
         if (!hashsetIsRehashing(t)) {
             /* Emit elements at the cursor index. */
@@ -1316,13 +1328,12 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
                 cursor = nextCursor(cursor, mask1);
 
                 /* Continue while bits covered by mask difference is non-zero */
-            } while (cursor & (mask0 ^ mask1));
+            } while ((cursor & (mask0 ^ mask1)) && cursor != start_cursor);
         }
         if (cursor == 0) {
             cursor_passed_zero = 1;
         }
-    }
-    while (in_probe_sequence && !single_step);
+    } while (in_probe_sequence && !single_step && cursor != start_cursor);
     hashsetResumeRehashing(t);
     rehashStepOnReadIfNeeded(t);
     return cursor_passed_zero ? 0 : cursor;
