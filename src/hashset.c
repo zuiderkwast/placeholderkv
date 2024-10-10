@@ -1304,8 +1304,9 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
             size_t mask0 = expToMask(t->bucketExp[table0]);
             size_t mask1 = expToMask(t->bucketExp[table1]);
 
-            /* Emit elements in table 0, if this bucket hasn't already been rehashed. */
-            if (!cursorIsLessThan(cursor, t->rehashIdx)) {
+            /* Emit elements in the smaller table, if this bucket hasn't already
+             * been rehashed. */
+            if (table0 == 0 && !cursorIsLessThan(cursor, t->rehashIdx)) {
                 bucket *b = &t->tables[table0][cursor & mask0];
                 for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                     if (b->presence & (1 << pos)) {
