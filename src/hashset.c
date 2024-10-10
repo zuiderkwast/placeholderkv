@@ -373,6 +373,7 @@ static signed char nextBucketExp(size_t min_capacity) {
     /* ceil(x / y) = floor((x - 1) / y) + 1 */
     size_t min_buckets = (min_capacity * BUCKET_FACTOR - 1) / BUCKET_DIVISOR + 1;
     if (min_buckets >= SIZE_MAX / 2) return CHAR_BIT * sizeof(size_t) - 1;
+    if (min_buckets == 1) return 0;
     return CHAR_BIT * sizeof(size_t) - __builtin_clzl(min_buckets - 1);
 }
 
