@@ -293,6 +293,7 @@ struct hashset {
     int8_t bucketExp[2];     /* Exponent for num buckets (num = 1 << exp). */
     int16_t pauseRehash;     /* Non-zero = rehashing is paused */
     int16_t pauseAutoShrink; /* Non-zero = automatic resizing disallowed. */
+    size_t everfulls[2];     /* Number of buckets with the everfull flag set. */
     void *metadata[];
 };
 
@@ -355,6 +356,7 @@ static void resetTable(hashset *t, int table_idx) {
     t->tables[table_idx] = NULL;
     t->used[table_idx] = 0;
     t->bucketExp[table_idx] = -1;
+    t->everfulls[table_idx] = 0;
 }
 
 static inline size_t numBuckets(int exp) {
@@ -384,6 +386,7 @@ static void rehashingCompleted(hashset *t) {
     t->bucketExp[0] = t->bucketExp[1];
     t->tables[0] = t->tables[1];
     t->used[0] = t->used[1];
+    t->everfulls[0] = t->everfulls[1];
     resetTable(t, 1);
     t->rehashIdx = -1;
 }
@@ -470,7 +473,10 @@ static void rehashStep(hashset *t) {
         dst->elements[pos_in_dst_bucket] = elem;
         dst->hashes[pos_in_dst_bucket] = h2;
         dst->presence |= (1 << pos_in_dst_bucket);
-        dst->everfull |= bucketIsFull(dst);
+        if (!dst->everfull && bucketIsFull(dst)) {
+            dst->everfull = 1;
+            t->everfulls[1]++;
+        }
         t->used[0]--;
         t->used[1]++;
     }
@@ -521,14 +527,18 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
         /* Overflow */
         return 0;
     }
-    signed char old_exp = t->bucketExp[hashsetIsRehashing(t) ? 1 : 0];
-    if (exp == old_exp) {
-        /* Can't resize to the same size. */
-        return 0;
-    }
 
+    signed char old_exp = t->bucketExp[hashsetIsRehashing(t) ? 1 : 0];
     size_t alloc_size = num_buckets * sizeof(bucket);
-    if (t->type->resizeAllowed) {
+    if (exp == old_exp) {
+        /* The only time we want to allow resize to the same size is when we
+         * have too many tombstones and need to rehash to improve probing
+         * performance. */
+        if (hashsetIsRehashing(t)) return 0;
+        size_t old_num_buckets = numBuckets(t->bucketExp[0]);
+        if (t->everfulls[0] < old_num_buckets / 2) return 0;
+        if (t->everfulls[0] != old_num_buckets && t->everfulls[0] < 10) return 0;
+    } else if (t->type->resizeAllowed) {
         double fill_factor = (double)min_capacity / ((double)numBuckets(old_exp) * ELEMENTS_PER_BUCKET);
         if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !t->type->resizeAllowed(alloc_size, fill_factor)) {
             /* Resize callback says no. */
@@ -568,6 +578,18 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
         }
     }
     return 1;
+}
+
+/* Probing is slow when there are too many tombstones. Resize to the same size
+ * to trigger rehashing and cleaning up tombstones. */
+static int cleanUpTombstonesIfNeeded(hashset *t) {
+    if (hashsetIsRehashing(t) || resize_policy == HASHSET_RESIZE_FORBID) {
+        return 0;
+    }
+    if (t->everfulls[0] * 100 >= numBuckets(t->bucketExp[0]) * MAX_FILL_PERCENT_SOFT) {
+        return resize(t, t->used[0], NULL);
+    }
+    return 0;
 }
 
 /* Returns 1 if the table is expanded, 0 if not expanded. If 0 is returned and
@@ -677,8 +699,12 @@ static void insert(hashset *t, uint64_t hash, void *elem) {
     b->elements[pos_in_bucket] = elem;
     b->presence |= (1 << pos_in_bucket);
     b->hashes[pos_in_bucket] = highBits(hash);
-    b->everfull |= bucketIsFull(b);
     t->used[table_index]++;
+    if (!b->everfull && bucketIsFull(b)) {
+        b->everfull = 1;
+        t->everfulls[table_index]++;
+        cleanUpTombstonesIfNeeded(t);
+    }
 }
 
 /* A fingerprint of some of the state of the hash table. */
@@ -1037,9 +1063,13 @@ void hashsetInsertAtPosition(hashset *t, void *elem, void *position) {
     assert((b->presence & (1 << pos_in_bucket)) == 0);
     b->presence |= (1 << pos_in_bucket);
     b->elements[pos_in_bucket] = elem;
-    /* Hash bits are already set by hashsetFindPositionForInsert. */
-    b->everfull |= bucketIsFull(b);
     t->used[table_index]++;
+    /* Hash bits are already set by hashsetFindPositionForInsert. */
+    if (!b->everfull && bucketIsFull(b)) {
+        b->everfull = 1;
+        t->everfulls[table_index]++;
+        cleanUpTombstonesIfNeeded(t);
+    }
 }
 
 /* Add or overwrite. Returns 1 if an new element was inserted, 0 if an existing
@@ -1586,7 +1616,8 @@ void hashsetGetStats(char *buf, size_t bufsize, hashset *t, int full) {
 
 void hashsetDump(hashset *t) {
     for (int table = 0; table <= 1; table++) {
-        printf("Table %d, used %zu, exp %d\n", table, t->used[table], t->bucketExp[table]);
+        printf("Table %d, used %zu, exp %d, buckets %ld, everfulls %ld\n",
+               table, t->used[table], t->bucketExp[table], numBuckets(t->bucketExp[table]), t->everfulls[table]);
         for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
             bucket *b = &t->tables[table][idx];
             printf("Bucket %d:%zu everfull:%d\n", table, idx, b->everfull);
