@@ -12,6 +12,14 @@
 /* From util.c: getRandomBytes to seed hash function. */
 void getRandomBytes(unsigned char *p, size_t len);
 
+/* Init hash function salt and seed random generator. */
+static void randomSeed(void) {
+    unsigned long long seed;
+    getRandomBytes((void *)&seed, sizeof(seed));
+    init_genrand64(seed);
+    srandom((unsigned)seed);
+}
+
 /* An element holding a string key and a string value in one allocation. */
 typedef struct {
     unsigned int keysize; /* Sizes, including null-terminator */
@@ -72,6 +80,7 @@ void emptyCallback(hashset *t) {
 /* Prototypes for debugging */
 void hashsetDump(hashset *t);
 void hashsetHistogram(hashset *t);
+void hashsetProbeMap(hashset *t);
 int hashsetLongestProbingChain(hashset *t);
 size_t nextCursor(size_t v, size_t mask);
 
@@ -90,10 +99,7 @@ int test_set_hash_function_seed(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
-
-    uint8_t hashseed[16];
-    getRandomBytes(hashseed, sizeof(hashseed));
-    hashsetSetHashFunctionSeed(hashseed);
+    randomSeed();
     return 0;
 }
 
@@ -317,7 +323,7 @@ int test_scan(int argc, char **argv, int flags) {
         long count = num_elements * (1 + 2 * (double)round / num_rounds);
 
         /* Seed, to make sure each round is different. */
-        test_set_hash_function_seed(argc, argv, flags);
+        randomSeed();
 
         /* Populate */
         hashset *t = hashsetCreate(&type);
@@ -390,6 +396,7 @@ int test_iterator(int argc, char **argv, int flags) {
     hashsetInitIterator(&iter, t);
     while (hashsetNext(&iter, (void **)&j)) {
         num_returned++;
+        assert(j >= 0 && j < count);
         element_returned[j]++;
     }
     hashsetResetIterator(&iter);
@@ -477,14 +484,10 @@ int test_random_element(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    randomSeed();
 
     long count = (flags & UNIT_TEST_LARGE_MEMORY) ? 7000 : 400;
     long num_rounds = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 10000;
-
-    unsigned long long seed;
-    getRandomBytes((void *)&seed, sizeof(seed));
-    init_genrand64(seed);
-    srandom((unsigned)seed);
 
     /* A set of longs, i.e. pointer-sized values. */
     hashsetType type = {0};
@@ -561,6 +564,65 @@ int test_random_element(int argc, char **argv, int flags) {
         TEST_ASSERT_MESSAGE("Too unfair randomness", 100 * p99 / m >= 60.0);
     } else {
         printf("To uncertain numbers to draw any conclusions about fairness.\n");
+    }
+    return 0;
+}
+
+typedef struct {
+    size_t capacity;
+    size_t count;
+    long elements[];
+} sampledata;
+
+void sample_scanfn(void *privdata, void *element) {
+    sampledata *data = (sampledata *)privdata;
+    if (data->count == data->capacity) return;
+    long j = (long)element;
+    data->elements[data->count++] = j;
+}
+
+int test_full_probe(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    randomSeed();
+
+    long count = 42; /* 75% of 8 buckets (7 elements per bucket). */
+    long num_rounds = (flags & UNIT_TEST_ACCURATE) ? 100000 : 1000;
+
+    /* A set of longs, i.e. pointer-sized values. */
+    hashsetType type = {0};
+    hashset *t = hashsetCreate(&type);
+
+    /* Populate */
+    for (long j = 0; j < count; j++) {
+        assert(hashsetAdd(t, (void *)j));
+    }
+
+    /* Scan and delete (simulates eviction), then add some more, repeat. */
+    size_t cursor = 0;
+    size_t max_samples = 30; /* at least the size of a bucket */
+    sampledata *data = calloc(1, sizeof(sampledata) + sizeof(long) * max_samples);
+    data->capacity = max_samples;
+
+    for (int r = 0; r < num_rounds; r++) {
+        size_t probes = hashsetProbeCounter(t, 0);
+        size_t buckets = hashsetBuckets(t);
+        assert(probes < buckets);
+
+        /* Empty the next buckets. */
+        data->count = 0;
+        cursor = hashsetScan(t, cursor, sample_scanfn, data, HASHSET_SCAN_SINGLE_STEP);
+        long n = data->count;
+        for (long i = 0; i < n; i++) {
+            int deleted = hashsetDelete(t, (void *)data->elements[i]);
+            if (!deleted) n--; /* Duplicate retuned by scan. */
+        }
+
+        /* Add the same number of elements back */
+        while (n > 0) {
+            n -= hashsetAdd(t, (void *)random());
+        }
     }
     return 0;
 }

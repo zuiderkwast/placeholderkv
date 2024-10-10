@@ -823,6 +823,11 @@ size_t hashsetBuckets(hashset *t) {
     return numBuckets(t->bucketExp[0]) + numBuckets(t->bucketExp[1]);
 }
 
+/* Returns the number of buckets that have the probe flag (tombstone) set. */
+size_t hashsetProbeCounter(hashset *t, int table) {
+    return t->everfulls[table];
+}
+
 /* Returns the size of the hashset structures, in bytes (not including the sizes
  * of the elements, if the elements are pointers to allocated objects). */
 size_t hashsetMemUsage(hashset *t) {
@@ -1649,6 +1654,18 @@ void hashsetHistogram(hashset *t) {
         for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
             bucket *b = &t->tables[table][idx];
             char c = b->presence == 0 && b->everfull ? 'X' : '0' + __builtin_popcount(b->presence);
+            printf("%c", c);
+        }
+        if (table == 0) printf(" ");
+    }
+    printf("\n");
+}
+
+void hashsetProbeMap(hashset *t) {
+    for (int table = 0; table <= 1; table++) {
+        for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
+            bucket *b = &t->tables[table][idx];
+            char c = b->everfull ? 'X' : 'o';
             printf("%c", c);
         }
         if (table == 0) printf(" ");

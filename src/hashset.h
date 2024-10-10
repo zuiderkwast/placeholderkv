@@ -152,6 +152,7 @@ hashsetType *hashsetGetType(hashset *t);
 void *hashsetMetadata(hashset *t);
 size_t hashsetSize(hashset *t);
 size_t hashsetBuckets(hashset *t);
+size_t hashsetProbeCounter(hashset *t, int table);
 size_t hashsetMemUsage(hashset *t);
 void hashsetPauseAutoShrink(hashset *t);
 void hashsetResumeAutoShrink(hashset *t);
