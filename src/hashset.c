@@ -1558,7 +1558,7 @@ hashsetStats *hashsetGetStatsHt(hashset *t, int htidx, int full) {
             /* End of a chain (even a zero-length chain). */
             /* Keys hashing to each bucket in this chain has a probe length
              * depending on the bucket they hash to. Keys hashing to this bucket
-             * have probing length 0, keys hashing to the previos bucket has
+             * have probing length 0, keys hashing to the previous bucket has
              * probling length 1, and so on. */
             for (unsigned long i = 0; i <= chainlen; i++) {
                 int index = (i < HASHSET_STATS_VECTLEN) ? i : HASHSET_STATS_VECTLEN - 1;
@@ -1633,7 +1633,7 @@ void hashsetGetStats(char *buf, size_t bufsize, hashset *t, int full) {
 
 void hashsetDump(hashset *t) {
     for (int table = 0; table <= 1; table++) {
-        printf("Table %d, used %zu, exp %d, buckets %ld, everfulls %ld\n",
+        printf("Table %d, used %zu, exp %d, buckets %zu, everfulls %zu\n",
                table, t->used[table], t->bucketExp[table], numBuckets(t->bucketExp[table]), t->everfulls[table]);
         for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
             bucket *b = &t->tables[table][idx];
