@@ -749,7 +749,7 @@ float getAllocatorFragmentation(size_t *out_frag_bytes) {
     return frag_pct;
 }
 
-/* Defrag scan callback for the pubsub dictionary. */
+/* Defrag scan callback for a pubsub channels hashset. */
 void defragPubsubScanCallback(void *privdata, void *elemref) {
     defragCtx *ctx = privdata;
     defragPubSubCtx *pubsub_ctx = ctx->privdata;
@@ -779,7 +779,7 @@ void defragPubsubScanCallback(void *privdata, void *elemref) {
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */
     if ((newclients = dictDefragTables(clients))) {
-        *channel_dict_ref = newchannel;
+        *channel_dict_ref = newclients;
     }
 
     server.stat_active_defrag_scanned++;
