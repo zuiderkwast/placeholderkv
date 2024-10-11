@@ -1341,7 +1341,6 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
         }
     } while (in_probe_sequence && !single_step && cursor != start_cursor);
     hashsetResumeRehashing(t);
-    rehashStepOnReadIfNeeded(t);
     return cursor_passed_zero ? 0 : cursor;
 }
 
@@ -1507,6 +1506,7 @@ unsigned hashsetSampleElements(hashset *t, void **dst, unsigned count) {
     while (samples.count < count) {
         cursor = hashsetScan(t, cursor, sampleElementsScanFn, &samples, HASHSET_SCAN_SINGLE_STEP);
     }
+    rehashStepOnReadIfNeeded(t);
     return count;
 }
 
