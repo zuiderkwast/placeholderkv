@@ -3299,7 +3299,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             initStaticStringObject(keyobj, key);
 
             /* Add the new object in the hash table */
-            int added = dbAddRDBLoad(db, key, val);
+            valkey *added = dbAddRDBLoad(db, key, val);
             server.rdb_last_load_keys_loaded++;
             if (!added) {
                 if (rdbflags & RDBFLAGS_ALLOW_DUP) {
@@ -3307,12 +3307,14 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                      * When it's set we allow new keys to replace the current
                      * keys with the same name. */
                     dbSyncDelete(db, &keyobj);
-                    dbAddRDBLoad(db, key, val);
+                    added = dbAddRDBLoad(db, key, val);
+                    serverAssert(added != NULL);
                 } else {
                     serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
                     serverPanic("Duplicated key found in RDB file");
                 }
             }
+            val = added;
 
             /* Set the expire time if needed */
             if (expiretime != -1) {

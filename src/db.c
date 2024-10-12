@@ -281,14 +281,14 @@ int getKeySlot(sds key) {
  *
  * The function returns 1 if the key was added to the database, otherwise 0 is returned.
  */
-int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
+valkey *dbAddRDBLoad(serverDb *db, sds key, robj *val) {
     int dict_index = server.cluster_enabled ? getKeySlot(key) : 0;
     void *pos = kvstoreHashsetFindPositionForInsert(db->keys, dict_index, key, NULL);
-    if (pos == NULL) return 0;
+    if (pos == NULL) return NULL;
     val = objectConvertToValkey(val, key);
     kvstoreHashsetInsertAtPosition(db->keys, dict_index, val, pos);
     initObjectLRUOrLFU(val);
-    return 1;
+    return val;
 }
 
 /* Overwrite an existing key with a new value. Incrementing the reference

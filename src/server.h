@@ -3531,7 +3531,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long lo
     (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE) /* Avoid any effects from fetching the key */
 
 valkey *dbAdd(serverDb *db, robj *key, robj *val);
-int dbAddRDBLoad(serverDb *db, sds key, robj *val);
+valkey *dbAddRDBLoad(serverDb *db, sds key, robj *val);
 valkey *dbReplaceValue(serverDb *db, robj *key, robj *val);
 
 #define SETKEY_KEEPTTL 1
