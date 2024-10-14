@@ -246,7 +246,7 @@ valkey *objectConvertToValkey(robj *val, const sds key) {
         o->type = val->type;
         o->encoding = val->encoding;
         o->refcount = 1;
-        o->lru = 0;
+        o->lru = val->lru;
         o->hasexpire = 1;
         o->hasembkey = 1;
         o->hasembkeyptr = 0;
