@@ -279,10 +279,11 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         char key[32], val[32];
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
-        keyval *e;
         void *position;
         size_t size_before_find = hashsetSize(t);
-        assert(hashsetTwoPhasePopFind(t, key, (void **)&e, &position));
+        void **ref = hashsetTwoPhasePopFindRef(t, key, &position);
+        assert(ref != NULL);
+        keyval *e = *ref;
         assert(!strcmp(val, getval(e)));
         assert(hashsetSize(t) == size_before_find);
         hashsetTwoPhasePopDelete(t, position);

@@ -177,7 +177,7 @@ void hashsetInsertAtPosition(hashset *t, void *elem, void *position);
 int hashsetReplace(hashset *t, void *elem);
 int hashsetPop(hashset *t, const void *key, void **popped);
 int hashsetDelete(hashset *t, const void *key);
-int hashsetTwoPhasePopFind(hashset *t, const void *key, void **found, void **position);
+void **hashsetTwoPhasePopFindRef(hashset *t, const void *key, void **position);
 void hashsetTwoPhasePopDelete(hashset *t, void *position);
 
 /* Iteration & scan */

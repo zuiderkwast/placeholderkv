@@ -1135,39 +1135,44 @@ int hashsetDelete(hashset *t, const void *key) {
 /* Two-phase pop: Look up an element, do something with it, then delete it
  * without searching the hash table again.
  *
- * hashsetTwoPhasePopFind finds an element in the table and also the position of
- * the element within the table, so that it can be deleted without looking it up
- * in the table again. The function returns 1 if an element with a matching key
- * is found and 0 otherwise.
+ * hashsetTwoPhasePopFindRef finds an element in the table and also the position
+ * of the element within the table, so that it can be deleted without looking it
+ * up in the table again. The function returns a pointer to the element the
+ * element pointer within the hash table, if an element with a matching key is
+ * found, and NULL otherwise.
  *
- * If 1 is returned, call 'hashsetTwoPhasePopDelete' with the returned
+ * If non-NULL is returned, call 'hashsetTwoPhasePopDelete' with the returned
  * 'position' afterwards to actually delete the element from the table. These
- * two functions are designed be used in pair. `hashsetTwoPhasePopFind` pauses
- * rehashing and `hashsetTwoPhasePopDelete` resumes rehashing.
+ * two functions are designed be used in pair. `hashsetTwoPhasePopFindRef`
+ * pauses rehashing and `hashsetTwoPhasePopDelete` resumes rehashing.
  *
  * While hashsetPop finds and returns an element, the purpose of two-phase pop
- * is to provide an optimized equivalent of hashsetFind followed by
+ * is to provide an optimized equivalent of hashsetFindRef followed by
  * hashsetDelete, where the first call finds the element but doesn't delete it
  * from the hash table and the latter doesn't need to look up the element in the
  * hash table again.
  *
  * Example:
  *
- *     void *element, *position;
- *     if (hashsetTwoPhasePopFind(t, key, &element, &position) {
+ *     void *position;
+ *     void **ref = hashsetTwoPhasePopFindRef(t, key, &position)
+ *     if (ref != NULL) {
+ *         void *element = *ref;
  *         // do something with the element, then...
  *         hashsetTwoPhasePopDelete(t, position);
  *     }
  */
-int hashsetTwoPhasePopFind(hashset *t, const void *key, void **found, void **position) {
-    if (hashsetSize(t) == 0) return 0;
+
+/* Like hashsetTwoPhasePopFind, but returns a pointer to where the element is
+ * stored in the table, or NULL if no matching element is found. */
+void **hashsetTwoPhasePopFindRef(hashset *t, const void *key, void **position) {
+    if (hashsetSize(t) == 0) return NULL;
     uint64_t hash = hashKey(t, key);
     int pos_in_bucket = 0;
     int table_index = 0;
     bucket *b = findBucket(t, hash, key, &pos_in_bucket, &table_index);
     if (b) {
         hashsetPauseRehashing(t);
-        *found = b->elements[pos_in_bucket];
 
         /* Compute bucket index from bucket pointer. */
         void *b0 = &t->tables[table_index][0];
@@ -1176,15 +1181,15 @@ int hashsetTwoPhasePopFind(hashset *t, const void *key, void **found, void **pos
 
         /* Encode position as pointer. */
         *position = encodePositionInTable(bucket_index, pos_in_bucket, table_index);
-        return 1;
+        return &b->elements[pos_in_bucket];
     } else {
-        return 0;
+        return NULL;
     }
 }
 
 /* Clears the position of the element in the hashset and resumes rehashing. The
  * element destructor is NOT called. The position is an opaque representation of
- * its position as found using hashsetTwoPhasePopFind(). */
+ * its position as found using hashsetTwoPhasePopFindRef(). */
 void hashsetTwoPhasePopDelete(hashset *t, void *position) {
     /* Decode position. */
     size_t bucket_index;
