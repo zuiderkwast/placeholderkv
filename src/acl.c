@@ -2760,7 +2760,6 @@ void aclCatWithFlags(client *c, hashset *commands, uint64_t cflag, int *arraylen
 
     struct serverCommand *cmd;
     while (hashsetNext(&iter, (void **)&cmd)) {
-        if (cmd->flags & CMD_MODULE) continue;
         if (cmd->acl_categories & cflag) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             (*arraylen)++;
