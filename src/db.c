@@ -319,9 +319,6 @@ static valkey *dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, voi
     if (overwrite) {
         /* RM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain old */
-        /* FIXME: We can't store shared objects in db when key is embedded in
-         * the object, so this is to be cleaned up. Just make sure we don't use
-         * shared objects when we convert robj-to-valkey or later. */
         incrRefCount(old);
         /* Although the key is not really deleted from the database, we regard
          * overwrite as two steps of unlink+add, so we still need to call the unlink
@@ -439,17 +436,21 @@ robj *dbRandomKey(serverDb *db) {
 /* Helper for sync and async delete. */
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     void *plink;
-    valkey *val;
     int dict_index = getKVStoreIndexForKey(key->ptr);
-    int found = kvstoreHashsetTwoPhasePopFind(db->keys, dict_index, key->ptr, (void **)&val, &plink);
-    if (found) {
-        /* RM_StringDMA may call dbUnshareStringValue which may free val, so we
+    void **ref = kvstoreHashsetTwoPhasePopFindRef(db->keys, dict_index, key->ptr, &plink);
+    if (ref != NULL) {
+        valkey *val = *ref;
+        /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
         incrRefCount(val);
         /* Tells the module that the key has been unlinked from the database. */
         moduleNotifyKeyUnlink(key, val, db->id, flags);
         /* We want to try to unblock any module clients or clients using a blocking XREADGROUP */
         signalDeletedKeyAsReady(db, key, val->type);
+        /* Match the incrRefCount above. */
+        decrRefCount(val);
+        /* Because of dbUnshareStringValue, the val in de may change. */
+        val = *ref;
 
         /* Delete from keys and expires tables. This will not free the object.
          * (The expires table has no destructor callback.) */
@@ -461,9 +462,6 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
             debugServerAssert(0 == kvstoreHashsetDelete(db->expires, dict_index, key->ptr));
         }
 
-        /* We should call decr before freeObjAsync. If not, the refcount may be
-         * greater than 1, so freeObjAsync doesn't work */
-        decrRefCount(val);
         if (async) {
             freeObjAsync(key, val, db->id);
         } else {

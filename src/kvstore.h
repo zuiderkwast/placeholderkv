@@ -81,7 +81,7 @@ int kvstoreHashsetAdd(kvstore *kvs, int didx, void *element);
 void *kvstoreHashsetFindPositionForInsert(kvstore *kvs, int didx, void *key, void **existing);
 void kvstoreHashsetInsertAtPosition(kvstore *kvs, int didx, void *elem, void *position);
 
-int kvstoreHashsetTwoPhasePopFind(kvstore *kvs, int didx, const void *key, void **found, void **position);
+void **kvstoreHashsetTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void **position);
 void kvstoreHashsetTwoPhasePopDelete(kvstore *kvs, int didx, void *position);
 int kvstoreHashsetPop(kvstore *kvs, int didx, const void *key, void **popped);
 int kvstoreHashsetDelete(kvstore *kvs, int didx, const void *key);

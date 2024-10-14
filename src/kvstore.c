@@ -812,10 +812,10 @@ void kvstoreHashsetInsertAtPosition(kvstore *kvs, int didx, void *elem, void *po
     cumulativeKeyCountAdd(kvs, didx, 1);
 }
 
-int kvstoreHashsetTwoPhasePopFind(kvstore *kvs, int didx, const void *key, void **found, void **position) {
-    hashset *d = kvstoreGetHashset(kvs, didx);
-    if (!d) return 0;
-    return hashsetTwoPhasePopFind(kvstoreGetHashset(kvs, didx), key, found, position);
+void **kvstoreHashsetTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void **position) {
+    hashset *s = kvstoreGetHashset(kvs, didx);
+    if (!s) return NULL;
+    return hashsetTwoPhasePopFindRef(s, key, position);
 }
 
 void kvstoreHashsetTwoPhasePopDelete(kvstore *kvs, int didx, void *position) {
