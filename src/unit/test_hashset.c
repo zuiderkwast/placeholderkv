@@ -625,5 +625,6 @@ int test_full_probe(int argc, char **argv, int flags) {
             n -= hashsetAdd(t, (void *)random());
         }
     }
+    hashsetRelease(t);
     return 0;
 }
