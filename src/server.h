@@ -869,8 +869,9 @@ struct ValkeyModuleDigest {
 #define LRU_CLOCK_MAX ((1 << LRU_BITS) - 1) /* Max value of obj->lru */
 #define LRU_CLOCK_RESOLUTION 1000           /* LRU clock resolution in ms */
 
-#define OBJ_SHARED_REFCOUNT ((1 << 30) - 1) /* Global object never destroyed. */
-#define OBJ_STATIC_REFCOUNT ((1 << 30) - 2) /* Object allocated in the stack. */
+#define OBJ_REFCOUNT_BITS 29
+#define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
+#define OBJ_STATIC_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 2) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
 struct serverObject {
     unsigned type : 4;
@@ -881,7 +882,7 @@ struct serverObject {
     unsigned hasexpire : 1;
     unsigned hasembkey : 1;
     unsigned hasembkeyptr : 1;
-    unsigned refcount : 30;
+    unsigned refcount : OBJ_REFCOUNT_BITS;
     void *ptr;
 };
 
