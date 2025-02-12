@@ -7091,7 +7091,13 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
 
-        /* Do system checks */
+    /* Version sanity check */
+    if (version2num(VALKEY_VERSION) != VALKEY_VERSION_NUM) {
+        serverLog(LL_WARNING, "Can't start: Version definitions in version.h mismatch. Fix and recompile.");
+        exit(1);
+    }
+
+    /* Do system checks */
 #ifdef __linux__
     linuxMemoryWarnings();
     sds err_msg = NULL;
