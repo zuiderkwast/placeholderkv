@@ -269,6 +269,8 @@ int test_version2num(int argc, char **argv, int flags) {
     TEST_ASSERT(version2num("7.2.1.0") == -1);
     TEST_ASSERT(version2num("1.-2.-3") == -1);
     TEST_ASSERT(version2num("1.2.3-rc4") == -1);
+    TEST_ASSERT(version2num("1.2.0-rc4") == 0x0101f3);
+    TEST_ASSERT(version2num("9.0.0-rc1") == 0x08fff0);
     TEST_ASSERT(version2num("") == -1);
     return 0;
 }

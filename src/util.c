@@ -885,7 +885,7 @@ err:
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */
 int version2num(const char *version) {
-    int v = 0, part = 0, numdots = 0;
+    int v = 0, part = 0, numdots = 0, rc = 0;
     const char *p = version;
     do {
         if (*p >= '0' && *p <= '9') {
@@ -895,6 +895,14 @@ int version2num(const char *version) {
             if (++numdots > 2) return -1;
             v = (v << 8) | part;
             part = 0;
+        } else if (numdots == 2 && *p++ == '-' && *p++ == 'r' && *p++ == 'c') {
+            /* Allow release candidates x.y.0-rcN */
+            if (part != 0) return -1;
+            do {
+                if (*p < '0' && *p > '9') return -1;
+                rc = rc * 10 + (unsigned)(*p++ - '0');
+            } while (*p);
+            break;
         } else {
             return -1;
         }
@@ -902,6 +910,7 @@ int version2num(const char *version) {
     } while (*p);
     if (numdots != 2) return -1;
     v = (v << 8) | part;
+    if (rc) v = v - 17 + rc;
     return v;
 }
 
