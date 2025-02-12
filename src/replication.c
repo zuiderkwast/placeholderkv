@@ -3622,8 +3622,15 @@ void syncWithPrimary(connection *conn) {
         err = sendCommandArgv(conn, argc, argv, lens);
         if (err) goto write_error;
 
-        /* Inform the primary of our (replica) version. */
-        err = sendCommand(conn, "REPLCONF", "version", VALKEY_VERSION, NULL);
+        /* Inform the primary of our (replica) version. Use the numeric version
+         * where 9.0.0-rc1 is represented as 8.255.240, etc. */
+        sds version = sdscatfmt(sdsempty(),
+                                "%i.%i.%i",
+                                (VALKEY_VERSION_NUM >> 16) & 0xff,
+                                (VALKEY_VERSION_NUM >> 8) & 0xff,
+                                VALKEY_VERSION_NUM & 0xff);
+        err = sendCommand(conn, "REPLCONF", "version", version, NULL);
+        sdsfree(version);
         if (err) goto write_error;
 
         server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;
