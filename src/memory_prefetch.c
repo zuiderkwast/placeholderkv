@@ -54,7 +54,7 @@ void freePrefetchCommandsBatch(void) {
 }
 
 void prefetchCommandsBatchInit(void) {
-    serverAssert(!batch);
+    if (batch) return;
     size_t max_prefetch_size = server.prefetch_batch_max_size;
 
     if (max_prefetch_size == 0) {
@@ -259,15 +259,17 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     batch->clients[batch->client_count++] = c;
 
     /* Client's next command */
-    if (c->io_parsed_cmd) {
+    if (c->parsed_cmd && !(c->read_flags & (READ_FLAGS_BAD_ARITY | READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT))) {
         c->read_flags |= READ_FLAGS_PREFETCHED;
-        addCommandToBatch(c->io_parsed_cmd, c->argv, c->argc, c->db, c->slot);
+        addCommandToBatch(c->parsed_cmd, c->argv, c->argc, c->db, c->slot);
     }
 
     /* Commands in the queue. */
     for (int j = c->cmd_queue.off; j < c->cmd_queue.len && batch->key_count < batch->max_prefetch_size; j++) {
         commandParserState *st = &c->cmd_queue.cmds[j];
-        if (!st->cmd) continue; /* Error or incomplete command. */
+        if (!st->cmd || st->read_flags & (READ_FLAGS_BAD_ARITY | READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT)) {
+            continue; /* Error or incomplete command. */
+        }
         st->read_flags |= READ_FLAGS_PREFETCHED;
         addCommandToBatch(st->cmd, st->argv, st->argc, c->db, st->slot);
     }

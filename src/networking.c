@@ -43,6 +43,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 
 /* This struct is used to encapsulate filtering criteria for operations on clients
  * such as identifying specific clients to kill or retrieve. Each field in the struct
@@ -239,7 +240,7 @@ client *createClient(connection *conn) {
     c->write_flags = 0;
     c->cmd_queue.cmds = NULL;
     c->cmd_queue.len = c->cmd_queue.off = c->cmd_queue.cap = 0;
-    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->parsed_cmd = NULL;
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
@@ -1612,7 +1613,7 @@ void freeClientArgv(client *c) {
     }
     c->argc = 0;
     c->cmd = NULL;
-    c->io_parsed_cmd = NULL;
+    c->parsed_cmd = NULL;
     c->argv_len_sum = 0;
     c->argv_len = 0;
     c->argv = NULL;
@@ -2715,7 +2716,7 @@ void resetClientIOState(client *c) {
     c->nwritten = 0;
     c->nread = 0;
     c->io_read_state = c->io_write_state = CLIENT_IDLE;
-    c->io_parsed_cmd = NULL;
+    c->parsed_cmd = NULL;
     c->flag.pending_command = 0;
     c->io_last_bufpos = 0;
     c->io_last_reply_block = NULL;
@@ -2728,7 +2729,8 @@ void initSharedQueryBuf(void) {
     sdsclear(thread_shared_qb);
 }
 
-void freeSharedQueryBuf(void) {
+void freeSharedQueryBuf(void *dummy) {
+    UNUSED(dummy);
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
 }
@@ -3319,7 +3321,7 @@ static bool consumeCommandQueue(client *c) {
     c->argv_len = st->argv_len;
     c->argv_len_sum = st->argv_len_sum;
     c->net_input_bytes_curr_cmd = st->input_bytes;
-    c->io_parsed_cmd = st->cmd;
+    c->parsed_cmd = st->cmd;
     c->slot = st->slot;
     if (queue->off == queue->len) {
         zfree(queue->cmds);
@@ -3385,34 +3387,19 @@ static void prefetchCommandQueueKeys(client *c) {
     hashtableIncrementalFindState key_incr_states[max_keys];
 
     /* Lookup commands and add keys to incremental find batch. */
-    if (c->read_flags & READ_FLAGS_PARSING_COMPLETED && c->argc != 0) {
-        c->read_flags |= READ_FLAGS_PREFETCHED;
-        if (!c->io_parsed_cmd) {
-            struct serverCommand *cmd = lookupCommand(c->argv, c->argc);
-            if (!cmd || !commandCheckArity(cmd, c->argc, NULL)) {
-                /* Wrong arity. This case is handled later. */
-            } else {
-                c->io_parsed_cmd = cmd;
-            }
-        }
-        if (c->io_parsed_cmd) {
-            num_keys = addKeysToIncrFindBatch(c, c->io_parsed_cmd, c->argv, c->argc,
-                                              key_incr_states, num_keys, max_keys);
-        }
+    if (c->parsed_cmd && !(c->read_flags & (READ_FLAGS_BAD_ARITY | READ_FLAGS_CROSSSLOT | READ_FLAGS_NO_KEYS))) {
+        num_keys = addKeysToIncrFindBatch(c, c->parsed_cmd, c->argv, c->argc,
+                                          key_incr_states, num_keys, max_keys);
     }
 
     cmdQueue *queue = &c->cmd_queue;
     for (int i = queue->off; i < queue->len; i++) {
         commandParserState *st = &queue->cmds[i];
-        if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
+        if (!st->cmd || st->read_flags & (READ_FLAGS_BAD_ARITY | READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT)) {
+            continue; /* Error or incomplete command. */
+        }
         if (num_keys >= soft_max_keys) break;
         st->read_flags |= READ_FLAGS_PREFETCHED;
-        if (!st->cmd) {
-            struct serverCommand *cmd = lookupCommand(st->argv, st->argc);
-            /* Wrong arity. Reset command so it will be handled later. */
-            if (!cmd || !commandCheckArity(cmd, st->argc, NULL)) continue;
-            st->cmd = cmd;
-        }
         num_keys = addKeysToIncrFindBatch(c, st->cmd, st->argv, st->argc,
                                           key_incr_states, num_keys, max_keys);
     }
@@ -3455,6 +3442,7 @@ int processInputBuffer(client *c) {
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseCommand(c);
+            prepareAllCommands(c);
         }
 
         /* Prefetch keys for the next commands in queue, if not already done. */
@@ -3490,13 +3478,14 @@ int processInputBuffer(client *c) {
 
 /* This function can be called from the main-thread or from the IO-thread.
  * The function allocates query-buf for the client if required and reads to it from the network.
- * It will set c->nread to the bytes read from the network. */
-void readToQueryBuf(client *c) {
+ * It will set c->nread to the bytes read from the network.
+ * Returns true if the buffer was filled (more data may be available). */
+static bool readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if (c->flag.close_asap) return;
+    if (c->flag.close_asap) return false;
 
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
 
@@ -3553,7 +3542,7 @@ void readToQueryBuf(client *c) {
 
     c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
     if (c->nread <= 0) {
-        return;
+        return false;
     }
 
     sdsIncrLen(c->querybuf, c->nread);
@@ -3570,8 +3559,10 @@ void readToQueryBuf(client *c) {
             c->read_flags |= READ_FLAGS_QB_LIMIT_REACHED;
         }
     }
+    return (size_t)c->nread == readlen;
 }
 
+#define REPL_MAX_READS_PER_IO_EVENT 25
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     /* Check if we can send the client to be handled by the IO-thread */
@@ -3579,12 +3570,19 @@ void readQueryFromClient(connection *conn) {
 
     if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
 
-    readToQueryBuf(c);
-
-    if (handleReadResult(c) == C_OK) {
-        if (processInputBuffer(c) == C_ERR) return;
-    }
-    beforeNextClient(c);
+    bool repeat = false;
+    int iter = 0;
+    do {
+        bool full_read = readToQueryBuf(c);
+        if (handleReadResult(c) == C_OK) {
+            if (processInputBuffer(c) == C_ERR) return;
+        }
+        repeat = (c->flag.primary &&
+                  !c->flag.close_asap &&
+                  ++iter < REPL_MAX_READS_PER_IO_EVENT &&
+                  full_read);
+        beforeNextClient(c);
+    } while (repeat);
 }
 
 /* An "Address String" is a colon separated ip:port pair.
@@ -5714,45 +5712,8 @@ void ioThreadReadQueryFromClient(void *data) {
         goto done;
     }
 
-    /* Lookup command offload */
-    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
-        /* The command was found, but the arity is invalid.
-         * In this case, we reset the parsed_cmd and will let the main thread handle it. */
-        c->io_parsed_cmd = NULL;
-    }
-
-    /* Offload slot calculations to the I/O thread to reduce main-thread load. */
-    if (c->io_parsed_cmd && server.cluster_enabled) {
-        getKeysResult result;
-        initGetKeysResult(&result);
-        int numkeys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
-        if (numkeys) {
-            robj *first_key = c->argv[result.keys[0].pos];
-            c->slot = keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
-        }
-        getKeysFreeResult(&result);
-    }
-
-    /* Lookup commands in command queue. */
-    for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
-        commandParserState *st = &c->cmd_queue.cmds[i];
-        if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
-        struct serverCommand *cmd = lookupCommand(st->argv, st->argc);
-        if (!cmd || !commandCheckArity(c->io_parsed_cmd, c->argc, NULL)) continue;
-        st->cmd = cmd;
-        if (server.cluster_enabled) {
-            /* Offload slot calculation to I/O thread */
-            getKeysResult result;
-            initGetKeysResult(&result);
-            int numkeys = getKeysFromCommand(st->cmd, st->argv, st->argc, &result);
-            if (numkeys) {
-                robj *first_key = st->argv[result.keys[0].pos];
-                st->slot = (int)keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
-            }
-            getKeysFreeResult(&result);
-        }
-    }
+    /* Lookup command and cluster slot calculation. */
+    prepareAllCommands(c);
 
 done:
     /* Only trim query buffer for non-primary clients

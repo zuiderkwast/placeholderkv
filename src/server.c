@@ -4004,6 +4004,52 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
+/* Prepare a parsed command for processing, including looking up the command,
+ * checking arity and calculating cluster slot. This should be done before
+ * calling processCommand() and can be done by I/O threads to offload the
+ * main-thread. */
+static void prepareCommandByArgv(robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot) {
+    /* Make sure we don't do this twice. */
+    debugServerAssert(*cmd == NULL && !(*read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || argc == 0) return;
+    *cmd = lookupCommand(argv, argc);
+    if (*cmd == NULL) {
+        *read_flags |= READ_FLAGS_COMMAND_NOT_FOUND;
+    } else if (!commandCheckArity(*cmd, argc, NULL)) {
+        *read_flags |= READ_FLAGS_BAD_ARITY;
+    } else if (server.cluster_enabled) {
+        debugServerAssert(*slot == -1 &&
+                          !(*read_flags & READ_FLAGS_CROSSSLOT) &&
+                          !(*read_flags & READ_FLAGS_NO_KEYS));
+        *slot = clusterSlotByCommand(*cmd, argv, argc, read_flags);
+    }
+}
+
+/* Prepare the client's current command. */
+void prepareCommand(client *c) {
+    prepareCommandByArgv(c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot);
+}
+
+/* Prepare the current command and the parsed commands in the client's queue. */
+void prepareAllCommands(client *c) {
+    prepareCommand(c);
+    cmdQueue *queue = &c->cmd_queue;
+    for (int i = queue->off; i < queue->len; i++) {
+        commandParserState *st = &queue->cmds[i];
+        prepareCommandByArgv(st->argv, st->argc, &st->read_flags, &st->cmd, &st->slot);
+    }
+}
+
+/* Undo prepareCommand(), to allow prepareCommand() again after applying command filters. */
+void unprepareCommand(client *c) {
+    c->parsed_cmd = NULL;
+    c->read_flags &= ~(READ_FLAGS_COMMAND_NOT_FOUND |
+                       READ_FLAGS_BAD_ARITY |
+                       READ_FLAGS_CROSSSLOT |
+                       READ_FLAGS_NO_KEYS);
+    c->slot = -1;
+}
+
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
@@ -4045,22 +4091,28 @@ int processCommand(client *c) {
      * In case we are reprocessing a command after it was blocked,
      * we do not have to repeat the same checks */
     if (!client_reprocessing_command) {
-        struct serverCommand *cmd = c->io_parsed_cmd ? c->io_parsed_cmd : lookupCommand(c->argv, c->argc);
+        struct serverCommand *cmd = c->parsed_cmd;
         if (!cmd) {
             /* Handle possible security attacks. */
             if (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")) {
                 securityWarningCommand(c);
                 return C_ERR;
             }
+            /* Check that the command lookup should has been done before calling
+             * this function, by calling prepareCommand(). */
+            serverAssert(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND);
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
         c->flag.buffered_reply = 0;
         sds err;
+
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
         }
-        if (!commandCheckArity(c->cmd, c->argc, &err)) {
+        if (c->read_flags & READ_FLAGS_BAD_ARITY) {
+            /* Already detected this, but do it again just to get the error message. */
+            serverAssert(!commandCheckArity(c->cmd, c->argc, &err));
             rejectCommandSds(c, err);
             return C_OK;
         }
@@ -4132,7 +4184,7 @@ int processCommand(client *c) {
     if (server.cluster_enabled && !obey_client &&
         !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
         int error_code;
-        clusterNode *n = getNodeByQuery(c, c->cmd, c->argv, c->argc, &c->slot, &error_code);
+        clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);
@@ -4339,11 +4391,9 @@ int processCommand(client *c) {
     }
 
     /* Exec the command */
-    if (c->flag.multi && c->cmd->proc == clientReplyCommand) {
-        addReplyError(c, "CLIENT REPLY not allowed during MULTI/EXEC transaction.");
-    } else if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
-               c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
-               c->cmd->proc != resetCommand) {
+    if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
+        c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
+        c->cmd->proc != resetCommand) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
