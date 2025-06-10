@@ -2470,7 +2470,7 @@ int handleReadResult(client *c) {
     return C_OK;
 }
 
-
+/* Sends an error replies to the client and sets the close-after-reply flag. */
 void handleParseError(client *c) {
     int flags = c->read_flags;
     if (flags & READ_FLAGS_ERROR_BIG_INLINE_REQUEST) {
@@ -2509,19 +2509,25 @@ void handleParseError(client *c) {
     }
 }
 
-int isParsingError(client *c) {
-    return c->read_flags & (READ_FLAGS_ERROR_BIG_INLINE_REQUEST | READ_FLAGS_ERROR_BIG_MULTIBULK |
-                            READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN | READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN |
-                            READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
-                            READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
-                            READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY | READ_FLAGS_ERROR_UNBALANCED_QUOTES);
+static bool isParseError(int read_flags) {
+    return read_flags & (READ_FLAGS_ERROR_BIG_INLINE_REQUEST | READ_FLAGS_ERROR_BIG_MULTIBULK |
+                         READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN | READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN |
+                         READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
+                         READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
+                         READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY | READ_FLAGS_ERROR_UNBALANCED_QUOTES);
 }
 
 /* This function is called after the query-buffer was parsed.
  * It is used to handle parsing errors and to update the client state.
- * The function returns C_OK if a command can be executed, otherwise C_ERR. */
+ * The function returns:
+ *
+ * - PARSE_OK if a command can be executed (or skipped if c->argc == 0);
+ * - PARSE_ERR if there was a parse error, and in this case a reply has been
+ *   added to the reply buffer and the close_after_reply flag is set;
+ * - PARSE_NEEDMORE if more data from the client is needed to parse a complete
+ *   command. */
 parseResult handleParseResults(client *c) {
-    if (isParsingError(c)) {
+    if (isParseError(c->read_flags)) {
         handleParseError(c);
         return PARSE_ERR;
     }
@@ -2909,16 +2915,15 @@ void processMultibulkBuffer(client *c) {
                               &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
     c->read_flags |= flag;
 
-    if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
-        /* Execute client's AUTH command before parsing more, because it affects
-         * parser limits for max allowed bulk and multibulk lengths. */
-        return;
-    }
+    /* Execute client's AUTH command before parsing more, because it affects
+     * parser limits for max allowed bulk and multibulk lengths. */
+    if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) return;
 
     /* Try parsing pipelined commands. */
     cmdQueue *queue = &c->cmd_queue;
     debugServerAssert(queue->len == 0);
     while (flag != 0 &&
+           !isParseError(flag) &&
            sdslen(c->querybuf) > c->qb_pos &&
            c->querybuf[c->qb_pos] == '*') {
         c->reqtype = PROTO_REQ_MULTIBULK;
