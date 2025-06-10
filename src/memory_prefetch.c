@@ -30,7 +30,6 @@ typedef struct PrefetchCommandsBatch {
     size_t client_count;            /* Number of clients in the current batch */
     size_t max_prefetch_size;       /* Maximum number of keys to prefetch in a batch */
     size_t executed_commands;       /* Number of commands executed in the current batch */
-    int *slots;                     /* Array of slots for each key */
     void **keys;                    /* Array of keys to prefetch in the current batch */
     client **clients;               /* Array of clients in the current batch */
     hashtable **keys_tables;        /* Main table for each key */
@@ -47,7 +46,6 @@ void freePrefetchCommandsBatch(void) {
     zfree(batch->clients);
     zfree(batch->keys);
     zfree(batch->keys_tables);
-    zfree(batch->slots);
     zfree(batch->prefetch_info);
     zfree(batch);
     batch = NULL;
@@ -66,7 +64,6 @@ void prefetchCommandsBatchInit(void) {
     batch->clients = zcalloc(max_prefetch_size * sizeof(client *));
     batch->keys = zcalloc(max_prefetch_size * sizeof(void *));
     batch->keys_tables = zcalloc(max_prefetch_size * sizeof(hashtable *));
-    batch->slots = zcalloc(max_prefetch_size * sizeof(int));
     batch->prefetch_info = zcalloc(max_prefetch_size * sizeof(KeyPrefetchInfo));
 }
 
@@ -242,8 +239,8 @@ static void addCommandToBatch(struct serverCommand *cmd, robj **argv, int argc, 
     int num_keys = getKeysFromCommand(cmd, argv, argc, &result);
     for (int i = 0; i < num_keys && batch->key_count < batch->max_prefetch_size; i++) {
         batch->keys[batch->key_count] = argv[result.keys[i].pos];
-        batch->slots[batch->key_count] = slot >= 0 ? slot : 0;
-        batch->keys_tables[batch->key_count] = kvstoreGetHashtable(db->keys, batch->slots[batch->key_count]);
+        int kv_idx = slot >= 0 ? slot : 0;
+        batch->keys_tables[batch->key_count] = kvstoreGetHashtable(db->keys, kv_idx);
         batch->key_count++;
     }
     getKeysFreeResult(&result);
