@@ -323,7 +323,6 @@ int updateIOThreads(const char **err) {
 
     // Create new threads.
     if (server.io_threads_num > prev_threads_num) {
-        prefetchCommandsBatchInit();
         for (int i = prev_threads_num; i < server.io_threads_num; i++) {
             createIOThread(i);
         }

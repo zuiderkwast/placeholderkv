@@ -46,6 +46,18 @@ start_server {tags {"auth external:skip"} overrides {requirepass foobar}} {
         $rr close
     }
 
+    test {Multibulk length is not limited when authenticating in same pipeline} {
+        set rr [valkey [srv "host"] [srv "port"] 0 $::tls]
+        set pipeline [encode_multibulk auth foobar]
+        append pipeline [encode_multibulk mset a 1 b 2 c 3 d 4 e 5]
+        $rr write $pipeline
+        $rr flush
+
+        assert_equal OK [$rr read]
+        assert_equal OK [$rr read]
+        $rr close
+    }
+
     test {For unauthenticated clients output buffer is limited} {
         set rr [valkey [srv "host"] [srv "port"] 1 $::tls]
         

@@ -76,6 +76,15 @@ proc valkey {{server 127.0.0.1} {port 6379} {defer 0} {tls 0} {tlsoptions {}} {r
     interp alias {} ::valkey::valkeyHandle$id {} ::valkey::__dispatch__ $id
 }
 
+# Encode a list of strings as RESP multibulk, for sending a command
+proc encode_multibulk {args} {
+    set cmd "*[expr {[llength $args]}]\r\n"
+    foreach a $args {
+        append cmd "$[string length $a]\r\n$a\r\n"
+    }
+    return $cmd
+}
+
 # On recent versions of tcl-tls/OpenSSL, reading from a dropped connection
 # results with an error we need to catch and mimic the old behavior.
 proc ::valkey::valkey_safe_read {fd len} {
@@ -157,11 +166,7 @@ proc ::valkey::__dispatch__raw__ {id method argv} {
     }
     if {[info command ::valkey::__method__$method] eq {}} {
         catch {unset ::valkey::attributes($id)}
-        set cmd "*[expr {[llength $argv]+1}]\r\n"
-        append cmd "$[string length $method]\r\n$method\r\n"
-        foreach a $argv {
-            append cmd "$[string length $a]\r\n$a\r\n"
-        }
+        set cmd [encode_multibulk $method {*}$argv]
         ::valkey::valkey_write $fd $cmd
         if {[catch {flush $fd}]} {
             catch {close $fd}

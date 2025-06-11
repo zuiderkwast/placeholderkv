@@ -1654,7 +1654,6 @@ void unlinkClient(client *c) {
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
         }
-        removeClientFromPendingCommandsBatch(c);
 
         /* Check if this is a replica waiting for diskless replication (rdb pipe),
          * in which case it needs to be cleaned from that list */
@@ -3350,89 +3349,6 @@ static void discardCommandQueue(client *c) {
     queue->off = queue->len = queue->cap = 0;
 }
 
-/* Returns the number of keys in the the incr_states array after adding keys. */
-static int addKeysToIncrFindBatch(client *c,
-                                  struct serverCommand *cmd,
-                                  robj **argv,
-                                  int argc,
-                                  hashtableIncrementalFindState *incr_states,
-                                  int num,
-                                  int max) {
-    getKeysResult result;
-    initGetKeysResult(&result);
-    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
-    if (numkeys) {
-        int kvstore_idx = 0;
-        if (server.cluster_enabled) {
-            robj *first_key = argv[result.keys[0].pos];
-            kvstore_idx = keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
-        }
-        hashtable *ht = kvstoreGetHashtable(c->db->keys, kvstore_idx);
-        if (ht != NULL) {
-            for (int i = 0; i < numkeys && num < max; i++) {
-                hashtableIncrementalFindState *incr_state = &incr_states[num++];
-                robj *keyobj = argv[result.keys[i].pos];
-                hashtableIncrementalFindInit(incr_state, ht, keyobj->ptr);
-            }
-        }
-    }
-    getKeysFreeResult(&result);
-    return num;
-}
-
-/* Prefetches the keys for the commands queued up in the client. */
-static void prefetchCommandQueueKeys(client *c) {
-    if (c->read_flags & READ_FLAGS_PREFETCHED) return;
-
-    /* Prefetching states */
-    const int max_keys = 32;
-    const int soft_max_keys = 16; /* Threshold to continue to the next command
-                                   * and prefetch its keys */
-    int num_keys = 0;
-    hashtableIncrementalFindState key_incr_states[max_keys];
-
-    /* Lookup commands and add keys to incremental find batch. */
-    if (c->parsed_cmd && !(c->read_flags & (READ_FLAGS_BAD_ARITY | READ_FLAGS_CROSSSLOT | READ_FLAGS_NO_KEYS))) {
-        num_keys = addKeysToIncrFindBatch(c, c->parsed_cmd, c->argv, c->argc,
-                                          key_incr_states, num_keys, max_keys);
-    }
-
-    cmdQueue *queue = &c->cmd_queue;
-    for (int i = queue->off; i < queue->len; i++) {
-        commandParserState *st = &queue->cmds[i];
-        if (!st->cmd || st->read_flags & (READ_FLAGS_BAD_ARITY | READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT)) {
-            continue; /* Error or incomplete command. */
-        }
-        if (num_keys >= soft_max_keys) break;
-        st->read_flags |= READ_FLAGS_PREFETCHED;
-        num_keys = addKeysToIncrFindBatch(c, st->cmd, st->argv, st->argc,
-                                          key_incr_states, num_keys, max_keys);
-    }
-    if (num_keys <= 1) return; /* No point to batch-lookup a single key */
-
-    /* Batch-lookup the keys. */
-    int not_complete_count;
-    do {
-        not_complete_count = 0;
-        for (int i = 0; i < num_keys; i++) {
-            not_complete_count += hashtableIncrementalFindStep(&key_incr_states[i]);
-        }
-    } while (not_complete_count != 0);
-
-    /* Prefetch value pointers. */
-    for (int i = 0; i < num_keys; i++) {
-        void *entry;
-        if (hashtableIncrementalFindGetResult(&key_incr_states[i], &entry)) {
-            robj *val = entry;
-            /* TODO? Prefetch all types and encodings except OBJ_ENCODING_EMBSTR
-             * and OBJ_ENCODING_INT. */
-            if (val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
-                valkey_prefetch(val->ptr);
-            }
-        }
-    }
-}
-
 int processInputBuffer(client *c) {
     /* Parse the query buffer. */
     while ((c->querybuf && c->qb_pos < sdslen(c->querybuf)) ||
@@ -3450,9 +3366,6 @@ int processInputBuffer(client *c) {
             prepareAllCommands(c);
         }
 
-        /* Prefetch keys for the next commands in queue, if not already done. */
-        prefetchCommandQueueKeys(c);
-
         if (handleParseResults(c) != PARSE_OK) {
             break;
         }
@@ -3467,6 +3380,11 @@ int processInputBuffer(client *c) {
              * This avoids unintentionally modifying the shared qb during processCommand as we may use
              * the shared qb for other clients during processEventsWhileBlocked */
             resetSharedQueryBuf(c);
+        }
+
+        /* Prefetch keys for the next commands in queue, if not already done. */
+        if (c->cmd_queue.off < c->cmd_queue.len) { // Only if pipelining
+            prefetchSomeCommandsForOneClient(c);
         }
 
         /* We are finally ready to execute the command. */
@@ -5544,12 +5462,6 @@ int postponeClientRead(client *c) {
 }
 
 int processIOThreadsReadDone(void) {
-    if (ProcessingEventsWhileBlocked) {
-        /* When ProcessingEventsWhileBlocked we may call processIOThreadsReadDone recursively.
-         * In this case, there may be some clients left in the batch waiting to be processed. */
-        processClientsCommandsBatch();
-    }
-
     if (listLength(server.clients_pending_io_read) == 0) return 0;
     int processed = 0;
     listNode *ln;
@@ -5569,6 +5481,10 @@ int processIOThreadsReadDone(void) {
         }
         /* memory barrier acquire to get the updated client state */
         atomic_thread_fence(memory_order_acquire);
+
+        /* Look ahead and prefetch keys in batches. If the first command of the
+         * first client is already prefetched, this is a no-op. */
+        prefetchSomeCommandsForSomeClients(server.clients_pending_io_read);
 
         listUnlinkNode(server.clients_pending_io_read, ln);
         c->flag.pending_read = 0;
@@ -5607,26 +5523,21 @@ int processIOThreadsReadDone(void) {
                 continue;
             }
         }
-
+        //----8<----
         if (c->argc > 0) {
             c->flag.pending_command = 1;
         }
 
         size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-        /* try to add the command to the batch */
-        int ret = addCommandToBatchAndProcessIfFull(c);
-        /* If the command was not added to the commands batch, process it immediately */
-        if (ret == C_ERR) {
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
-        }
+
+        /* Process pending and queued commands. */
+        if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+
         if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
             /* A client was unlink from the list possibly making the next node invalid */
             next = listFirst(server.clients_pending_io_read);
         }
     }
-
-    processClientsCommandsBatch();
-
     return processed;
 }
 

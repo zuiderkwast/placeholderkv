@@ -4100,6 +4100,11 @@ int processCommand(client *c) {
             }
             /* Check that the command lookup should has been done before calling
              * this function, by calling prepareCommand(). */
+            serverAssert(c->argc > 0);
+            if (!(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND)) {
+                serverLog(LL_WARNING, "Command not prepared: %s (argc=%d)", (char*)c->argv[0]->ptr, c->argc);
+                serverPanic("not prepared");
+            }
             serverAssert(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND);
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
@@ -7203,6 +7208,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
     if (server.cluster_enabled) {
         clusterInitLast();
     }
+    prefetchCommandsBatchInit();
     InitServerLast();
 
     if (!server.sentinel_mode) {
