@@ -4,9 +4,16 @@
 struct client;
 struct list;
 
+typedef enum {
+    PREFETCH_DISABLED,
+    PREFETCH_ADDED,
+    PREFETCH_FULL_ADDED,
+    PREFETCH_FULL_NOT_ADDED
+} prefetchAddToBatchResult;
+
 void prefetchCommandsBatchInit(void);
 //void processClientsCommandsBatch(void);
-//int addCommandToBatchAndProcessIfFull(struct client *c);
+prefetchAddToBatchResult addToBatchAndProcessIfFull(struct client *c);
 //void removeClientFromPendingCommandsBatch(struct client *c);
 
 void prefetchSomeCommandsForSomeClients(struct list *clients);

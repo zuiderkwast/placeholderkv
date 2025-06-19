@@ -1057,7 +1057,12 @@ typedef struct ClientFlags {
     uint64_t prevent_repl_prop : 1;        /* Don't propagate to replicas. */
     uint64_t prevent_prop : 1;             /* Don't propagate to AOF or replicas. */
     uint64_t pending_write : 1;            /* Client has output to send but a write handler is yet not installed. */
-    uint64_t pending_read : 1;             /* Client has output to send but a write handler is yet not installed. */
+    uint64_t pending_read : 1;             /* Client has pending read and is in
+                                            * server.clients_pending_io_read
+                                            * with pending_read_list_node. */
+    uint64_t parsed_command : 1;           /* Client has parsed commands and is
+                                            * in server.clients_parsed_command
+                                            * with parsed_command_list_node. */
     uint64_t reply_off : 1;                /* Don't send replies to client. */
     uint64_t reply_skip_next : 1;          /* Set CLIENT_REPLY_SKIP for next cmd */
     uint64_t reply_skip : 1;               /* Don't send just this reply. */
@@ -1115,7 +1120,6 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
-    uint64_t reserved : 1;                 /* Reserved for future use */
 } ClientFlags;
 
 typedef struct ClientPubSubData {
@@ -1260,8 +1264,9 @@ typedef struct client {
      * client, and in which category the client was, in order to remove it
      * before adding it the new value. */
     uint8_t last_memory_type;
-    uint8_t capa;                    /* Client capabilities: CLIENT_CAPA* macros. */
-    listNode pending_read_list_node; /* IO thread only ?*/
+    uint8_t capa;                      /* Client capabilities: CLIENT_CAPA* macros. */
+    listNode pending_read_list_node;   /* Node in server.clients_pending_io_read */
+    listNode parsed_command_list_node; /* Node in server.clients_parsed_command */
     /* Statistics and metrics */
     unsigned long long net_input_bytes;           /* Total network input bytes read from this client. */
     unsigned long long net_input_bytes_curr_cmd;  /* Total network input bytes read for the* execution of this client's current command. */
@@ -1657,6 +1662,7 @@ struct valkeyServer {
     list *clients_pending_write;           /* There is to write or install handler. */
     list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
     list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
+    list *clients_parsed_command;          /* Clients with parsed commands to be executed. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
     rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
                                             * Key: RDB client ID

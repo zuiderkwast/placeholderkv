@@ -3383,7 +3383,7 @@ int processInputBuffer(client *c) {
         }
 
         /* Prefetch keys for the next commands in queue, if not already done. */
-        if (c->cmd_queue.off < c->cmd_queue.len) { // Only if pipelining
+        if (!(c->read_flags & READ_FLAGS_PREFETCHED) && c->cmd_queue.off < c->cmd_queue.len) { // Only if pipelining
             prefetchSomeCommandsForOneClient(c);
         }
 
@@ -5461,6 +5461,12 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
+static void addClientToParsedCommandsList(client *c) {
+    serverAssert(!c->flag.parsed_command);
+    c->flag.parsed_command = 1;
+    listLinkNodeTail(server.clients_parsed_command, &c->parsed_command_list_node);
+}
+
 int processIOThreadsReadDone(void) {
     if (listLength(server.clients_pending_io_read) == 0) return 0;
     int processed = 0;
@@ -5481,10 +5487,6 @@ int processIOThreadsReadDone(void) {
         }
         /* memory barrier acquire to get the updated client state */
         atomic_thread_fence(memory_order_acquire);
-
-        /* Look ahead and prefetch keys in batches. If the first command of the
-         * first client is already prefetched, this is a no-op. */
-        prefetchSomeCommandsForSomeClients(server.clients_pending_io_read);
 
         listUnlinkNode(server.clients_pending_io_read, ln);
         c->flag.pending_read = 0;
@@ -5523,20 +5525,25 @@ int processIOThreadsReadDone(void) {
                 continue;
             }
         }
-        //----8<----
+
+        /* Client has commands that can be executed. */
+        addClientToParsedCommandsList(c);
+    }
+
+    /* Execute commands. */
+    while ((ln = listFirst(server.clients_parsed_command)) != NULL) {
+        client *c = listNodeValue(ln);
+
+        /* Prefetch until the first command of the first client is ready, the
+         * next command is one step away from ready, etc. */
+        prefetchUpTo(c);
+
         if (c->argc > 0) {
             c->flag.pending_command = 1;
         }
 
-        size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-
         /* Process pending and queued commands. */
         if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
-
-        if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
-            /* A client was unlink from the list possibly making the next node invalid */
-            next = listFirst(server.clients_pending_io_read);
-        }
     }
     return processed;
 }

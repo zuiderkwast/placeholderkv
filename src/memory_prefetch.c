@@ -34,6 +34,7 @@ typedef struct PrefetchCommandsBatch {
     client **clients;               /* Array of clients in the current batch */
     hashtable **keys_tables;        /* Main table for each key */
     KeyPrefetchInfo *prefetch_info; /* Prefetch info for each key */
+    int next_client_idx;            /* When iterating over a complete batch, otherwise -1 */
 } PrefetchCommandsBatch;
 
 static PrefetchCommandsBatch *batch = NULL;
@@ -258,11 +259,12 @@ static int addCommandToBatch(struct serverCommand *cmd, robj **argv, int argc,
     return C_OK;
 }
 
-/* Adds the as many of the client's commands to the current batch that can fit
- * before the batch is full.
+/* Adds of the client's commands to the current batch, as many from the client's
+ * queued commands that can fit before the batch is full.
  *
- * Returns C_OK if any commands were added successfully, C_ERR otherwise. */
-static int addClientQueuedCommandsToBatch(client *c) {
+ * Returns C_OK if at least one command was added successfully, C_ERR
+ * otherwise. */
+prefetchAddToBatchResult addToBatchAndProcessIfFull(client *c) {
     if (!batch) return C_ERR;
 
     batch->clients[batch->client_count++] = c;
@@ -287,13 +289,15 @@ static int addClientQueuedCommandsToBatch(client *c) {
         }
     }
 
+    // FIXME: Process if full.
+    
     return C_OK;
 }
 
 /* Prefetches a batch of commands for the next clients in the list. If the first
  * client's first command is already prefetched, do nothing. Let the caller
  * executed all prefetched commands before we prefetch another batch. */
-void prefetchSomeCommandsForSomeClients(list *clients) {
+void XXXprefetchSomeCommandsForSomeClients(list *clients) {
     if (!batch) return;
     serverAssert(batch->client_count == 0);
 
