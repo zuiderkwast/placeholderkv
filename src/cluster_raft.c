@@ -580,10 +580,10 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
          * joiner, so we can't form a competing cluster. */
         clusterRaftUnblockMeet(sender);
     } else {
-        /* Already a joiner (stepped down for another node). Defer until
-         * we join a cluster and can invite the sender. */
+        /* Not a leader and not in a cluster — defer. */
         listAddNodeTail(rs->deferred_meets, link);
-        serverLog(LL_NOTICE, "Deferring MEET from %.40s (waiting to join cluster).", sender->name);
+        serverLog(LL_NOTICE, "Deferring MEET from %.40s (role=%d, size=%d).",
+                  sender->name, rs->role, server.cluster->size);
     }
 
     return 1;
@@ -820,6 +820,8 @@ static void clusterRaftDeferPendingProposals(void) {
 /* Step down to follower if we see a higher term. Returns 1 if stepped down. */
 static int clusterRaftMaybeStepDown(clusterRaftState *rs, uint64_t term) {
     if (term > rs->current_term) {
+        serverLog(LL_NOTICE, "Stepping down: saw term %llu > current %llu.",
+                  (unsigned long long)term, (unsigned long long)rs->current_term);
         clusterRaftDeferPendingProposals();
         rs->current_term = term;
         rs->role = RAFT_ROLE_FOLLOWER;
@@ -1730,6 +1732,19 @@ static void clusterRaftCron(void) {
         rs->current_term++;
         memcpy(rs->voted_for, myself->name, CLUSTER_NAMELEN);
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
+        /* Reject any deferred MEETs — the cluster formation failed. */
+        if (listLength(rs->deferred_meets) > 0) {
+            listIter dli;
+            listNode *dln;
+            listRewind(rs->deferred_meets, &dli);
+            while ((dln = listNext(&dli)) != NULL) {
+                clusterLink *mlink = listNodeValue(dln);
+                if (mlink->node) {
+                    clusterRaftSendBare(mlink, "MEET_REJECTED");
+                }
+            }
+            listEmpty(rs->deferred_meets);
+        }
     }
 
     if (dictSize(server.cluster->nodes) > 1) {
